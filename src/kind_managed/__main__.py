@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="KIND 대신 로컬 HTML 파일을 파싱합니다(오프라인 점검용).",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help="KIND 응답 구조를 진단 출력합니다(파서 수정용, 메일/엑셀 없음).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="상세 로그 출력")
     return parser
 
@@ -50,6 +55,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.probe:
+        from .probe import run_probe
+
+        return run_probe(dump_path="out/kind-main.html")
 
     app_config = AppConfig.from_env()
     if args.market is not None:
