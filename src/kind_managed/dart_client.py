@@ -23,6 +23,9 @@ log = logging.getLogger(__name__)
 CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 COMPANY_URL = "https://opendart.fss.or.kr/api/company.json"
 
+# corpCode.xml 은 수십 MB 라 내려받는 데 몇 분이 걸릴 수 있다.
+CORP_CODE_TIMEOUT = 600
+
 # DART 응답 status 코드 중 재시도가 무의미한 것들
 _FATAL_STATUS = {
     "010": "등록되지 않은 DART API 키입니다.",
@@ -128,8 +131,11 @@ class DartClient:
 
     def _download_corp_code(self) -> bytes:
         try:
+            # 20MB 규모라 일반 요청보다 넉넉한 타임아웃을 준다.
             response = self.session.get(
-                CORP_CODE_URL, params={"crtfc_key": self.api_key}, timeout=self.timeout
+                CORP_CODE_URL,
+                params={"crtfc_key": self.api_key},
+                timeout=max(self.timeout, CORP_CODE_TIMEOUT),
             )
             response.raise_for_status()
         except requests.RequestException as exc:
@@ -163,6 +169,9 @@ class DartClient:
             xml_bytes = self._download_corp_code()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(xml_bytes)
+            for stale in self.cache_dir.glob("corpcode-*.xml"):
+                if stale != cache_path:
+                    stale.unlink(missing_ok=True)
         self._by_stock, self._by_name = parse_corp_code_xml(xml_bytes)
         log.info("corpCode 로드 완료: 상장 %d건", len(self._by_stock))
 

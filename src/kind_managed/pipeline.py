@@ -67,11 +67,17 @@ def collect_rows(
                 row["note"] = problem
         rows.append(row)
 
-    log.info(
-        "사업자등록번호 매칭: %d/%d건",
-        sum(1 for row in rows if row["biz_no"]),
-        len(rows),
-    )
+    matched = sum(1 for row in rows if row["biz_no"])
+    log.info("사업자등록번호 매칭: %d/%d건", matched, len(rows))
+
+    unmatched = [row["name"] for row in rows if not row["biz_no"]]
+    if unmatched:
+        # 엑셀 '비고' 에도 남지만, 로그에서 바로 보이도록 함께 출력한다.
+        log.warning(
+            "사업자등록번호 미확인 %d건: %s",
+            len(unmatched),
+            ", ".join(unmatched[:20]) + (" 외" if len(unmatched) > 20 else ""),
+        )
     return rows
 
 

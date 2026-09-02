@@ -181,3 +181,31 @@ def test_api_error_status_on_company(tmp_path):
 
     assert info is None
     assert "status=020" in problem
+
+
+def test_stale_corp_code_cache_is_removed(tmp_path):
+    """캐시가 남아 계속 쌓이지 않도록 지난 날짜 파일은 지운다."""
+    stale = tmp_path / "corpcode-2020-01-01.xml"
+    stale.write_bytes(b"<result/>")
+
+    _client(tmp_path, _FakeSession()).lookup(stock_code="095570")
+
+    assert not stale.exists()
+    assert len(list(tmp_path.glob("corpcode-*.xml"))) == 1
+
+
+def test_company_info_exposes_stock_code(tmp_path):
+    """KIND 에 종목코드가 없으므로 DART 응답의 stock_code 를 쓴다."""
+    session = _FakeSession(
+        company_payload={
+            "status": "000",
+            "corp_name": "삼성전자",
+            "stock_code": "005930",
+            "bizr_no": "1248100998",
+        }
+    )
+    info, problem = _client(tmp_path, session).lookup(stock_code="005930")
+
+    assert problem == ""
+    assert info.stock_code == "005930"
+    assert info.biz_no == "124-81-00998"

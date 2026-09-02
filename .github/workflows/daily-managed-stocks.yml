@@ -40,6 +40,17 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
+      - name: 캐시 키용 날짜
+        id: cache_key
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # corpCode.xml 은 20MB 규모라 내려받는 데 수 분이 걸린다. 하루 단위로 캐시한다.
+      - name: DART 기업코드 캐시
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: dart-corpcode-${{ steps.cache_key.outputs.date }}
+
       - name: 관리종목 수집 → 엑셀 → 메일 발송
         env:
           PYTHONPATH: src
