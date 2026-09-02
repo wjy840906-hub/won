@@ -209,3 +209,76 @@ def test_company_info_exposes_stock_code(tmp_path):
     assert problem == ""
     assert info.stock_code == "005930"
     assert info.biz_no == "124-81-00998"
+
+
+# --------------------------------------------------------------------- 우선주
+
+PREFERRED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<result>
+  <list><corp_code>00100001</corp_code><corp_name>깨끗한나라</corp_name><stock_code>004540</stock_code><modify_date>20260101</modify_date></list>
+  <list><corp_code>00100002</corp_code><corp_name>미래에셋증권</corp_name><stock_code>006800</stock_code><modify_date>20260101</modify_date></list>
+</result>
+""".encode("utf-8")
+
+
+class _PreferredSession(_FakeSession):
+    def get(self, url, params=None, timeout=None):
+        if url.endswith("corpCode.xml"):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr("CORPCODE.xml", PREFERRED_XML)
+            return _Response(content=buffer.getvalue())
+        self.company_calls.append(params["corp_code"])
+        return _Response(payload=self.company_payload)
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("깨끗한나라우", "깨끗한나라"),
+        ("동양2우B", "동양"),
+        ("진흥기업2우B", "진흥기업"),
+        ("삼성전자", ""),
+        ("우", ""),
+    ],
+)
+def test_common_stock_name(name, expected):
+    from kind_managed.dart_client import common_stock_name
+
+    assert common_stock_name(name) == expected
+
+
+def test_preferred_share_matches_via_common_stock(tmp_path):
+    """우선주는 DART 에 없으므로 보통주 상호로 사업자번호를 찾는다."""
+    session = _PreferredSession(
+        company_payload={
+            "status": "000",
+            "corp_name": "깨끗한나라",
+            "stock_code": "004540",
+            "bizr_no": "1048118820",
+        }
+    )
+    info, note = _client(tmp_path, session).lookup(name="깨끗한나라우")
+
+    assert info is not None
+    assert info.biz_no == "104-81-18820"
+    assert info.via_common_stock is True
+    assert note == "우선주 — 보통주(깨끗한나라) 기준"
+
+
+def test_preferred_fallback_does_not_mismatch_names_ending_in_u(tmp_path):
+    """'미래에셋대우' 처럼 우로 끝나는 상호를 엉뚱한 회사에 붙이면 안 된다."""
+    session = _PreferredSession()
+    info, problem = _client(tmp_path, session).lookup(name="미래에셋대우")
+
+    assert info is None
+    assert problem == "DART 고유번호 미매칭"
+
+
+def test_exact_match_is_preferred_over_fallback(tmp_path):
+    """정식 상호로 찾히면 우선주 보정을 타지 않는다."""
+    session = _PreferredSession()
+    info, note = _client(tmp_path, session).lookup(name="깨끗한나라")
+
+    assert note == ""
+    assert info.via_common_stock is False

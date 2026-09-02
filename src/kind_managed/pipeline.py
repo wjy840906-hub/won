@@ -61,7 +61,8 @@ def collect_rows(
                 row["corp_reg_no"] = info.corp_reg_no
                 row["ceo_name"] = info.ceo_name
                 # KIND 관리종목 표에는 종목코드가 없어 DART 조회 결과로 채운다.
-                if not row["code"] and info.stock_code:
+                # 단, 우선주를 보통주로 매칭한 경우의 종목코드는 이 종목의 것이 아니다.
+                if not row["code"] and info.stock_code and not info.via_common_stock:
                     row["code"] = info.stock_code.zfill(6)
             if problem:
                 row["note"] = problem

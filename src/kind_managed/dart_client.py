@@ -12,7 +12,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
@@ -56,6 +56,8 @@ class CompanyInfo:
     ceo_name: str = ""
     address: str = ""
     established_on: str = ""
+    # 우선주를 보통주 상호로 매칭한 경우 True(종목코드는 보통주 것이라 쓰지 않는다).
+    via_common_stock: bool = False
 
 
 def format_biz_no(raw: str) -> str:
@@ -72,6 +74,20 @@ def format_corp_reg_no(raw: str) -> str:
     if len(digits) != 13:
         return (raw or "").strip()
     return f"{digits[:6]}-{digits[6:]}"
+
+
+# 우선주 종목명 접미사: 우, 우B, 2우B, 3우C ...
+# DART 에는 우선주가 따로 등재되지 않으므로 보통주 상호로 다시 찾는다.
+_PREFERRED_SUFFIX_RE = re.compile(r"\d*우[A-Z]?$")
+
+
+def common_stock_name(name: str) -> str:
+    """우선주 종목명에서 보통주 상호를 얻는다(우선주가 아니면 빈 문자열)."""
+    text = (name or "").strip()
+    stem = _PREFERRED_SUFFIX_RE.sub("", text).strip()
+    if stem == text or len(stem) < 2:
+        return ""
+    return stem
 
 
 def _normalize_name(name: str) -> str:
@@ -232,14 +248,29 @@ class DartClient:
             (기업개황 또는 None, 실패 사유 메시지)
         """
         corp_code = self.find_corp_code(stock_code=stock_code, name=name)
+
+        note = ""
+        if not corp_code:
+            # 우선주는 DART 에 없으므로 보통주 상호로 한 번 더 찾는다.
+            # 사업자등록번호는 법인 단위라 보통주와 같다.
+            stem = common_stock_name(name)
+            if stem:
+                corp_code = self.find_corp_code(name=stem)
+                if corp_code:
+                    note = f"우선주 — 보통주({stem}) 기준"
+
         if not corp_code:
             return None, "DART 고유번호 미매칭"
+
         try:
             info = self.fetch_company(corp_code)
         except DartError as exc:
             # 단건 실패로 전체 파이프라인을 멈추지 않는다.
             log.warning("기업개황 조회 실패 (%s / %s): %s", stock_code, name, exc)
             return None, str(exc)
+
+        if note:
+            info = replace(info, via_common_stock=True)
         if not info.biz_no:
             return info, "DART에 사업자등록번호 없음"
-        return info, ""
+        return info, note

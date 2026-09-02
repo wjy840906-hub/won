@@ -223,3 +223,28 @@ def test_collect_rows_fills_stock_code_from_dart():
 
     assert rows[0]["code"] == "005930"  # 앞자리 0 보정
     assert rows[0]["biz_no"] == "104-81-18820"
+
+
+def test_preferred_share_does_not_borrow_common_stock_code():
+    """우선주에 보통주 종목코드를 붙이면 안 된다(사업자번호는 같아도 종목은 다르다)."""
+
+    class _PreferredDart:
+        def lookup(self, stock_code="", name=""):
+            from kind_managed.dart_client import CompanyInfo
+
+            return (
+                CompanyInfo(
+                    corp_code="00100001",
+                    stock_code="004540",  # 보통주 코드
+                    biz_no="104-81-18820",
+                    via_common_stock=True,
+                ),
+                "우선주 — 보통주(깨끗한나라) 기준",
+            )
+
+    stock = ManagedStock(name="깨끗한나라우", reason="자본잠식", designated_on="2026-08-20")
+    rows = collect_rows([stock], _PreferredDart(), as_of="2026-09-02")
+
+    assert rows[0]["biz_no"] == "104-81-18820"
+    assert rows[0]["code"] == ""  # 보통주 코드를 빌려 쓰지 않는다
+    assert rows[0]["note"] == "우선주 — 보통주(깨끗한나라) 기준"
