@@ -143,7 +143,7 @@ class AppConfig:
     cache_dir: str = ".cache"
     request_timeout: int = 30
     max_pages: int = 50
-    page_size: int = 100
+    page_size: int = 500
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -155,5 +155,5 @@ class AppConfig:
             cache_dir=_env("CACHE_DIR", ".cache"),
             request_timeout=_env_int("REQUEST_TIMEOUT", 30),
             max_pages=_env_int("KIND_MAX_PAGES", 50),
-            page_size=_env_int("KIND_PAGE_SIZE", 100),
+            page_size=_env_int("KIND_PAGE_SIZE", 500),
         )

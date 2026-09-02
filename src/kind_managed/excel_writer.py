@@ -46,6 +46,7 @@ def write_excel(
     rows: list[dict[str, str]],
     out_path: str | Path,
     as_of: str,
+    period: str = "",
     source_note: str = "출처: 한국거래소 KIND(kind.krx.co.kr) / 사업자등록번호: 금융감독원 DART",
 ) -> ExcelResult:
     """관리종목 목록을 서식이 적용된 엑셀 파일로 저장한다."""
@@ -56,7 +57,8 @@ def write_excel(
     sheet = workbook.active
     sheet.title = _sheet_title(as_of)
 
-    title = f"관리종목 현황 ({as_of} 기준, 총 {len(rows)}종목)"
+    scope = f", {period}" if period else ""
+    title = f"관리종목 현황 ({as_of} 기준{scope}, 총 {len(rows)}종목)"
     sheet.cell(row=1, column=1, value=title).font = Font(size=13, bold=True)
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLUMNS))
     sheet.cell(row=2, column=1, value=source_note).font = Font(size=9, color="808080")

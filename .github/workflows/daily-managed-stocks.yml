@@ -10,6 +10,10 @@ on:
         description: "시장 구분 (빈 값=전체, stockMkt, kosdaqMkt, konexMkt)"
         required: false
         default: ""
+      from_date:
+        description: "이 날짜 이후 지정분만 (예: 2026-08-01, 2026-08). 비우면 기본값 사용"
+        required: false
+        default: ""
       send_email:
         description: "메일 발송 여부"
         type: boolean
@@ -50,6 +54,9 @@ jobs:
           MAIL_TO: ${{ vars.MAIL_TO || 'wonjiyun@hanafn.com' }}
           MAIL_CC: ${{ vars.MAIL_CC }}
           KIND_MARKET: ${{ inputs.market }}
+          # 지정일이 이 날짜 이후인 관리종목만 수집한다.
+          # 범위를 바꾸려면 Variables 의 FROM_DATE 를 설정하면 된다.
+          FROM_DATE: ${{ inputs.from_date || vars.FROM_DATE || '2026-08-01' }}
         run: |
           python -m kind_managed \
             ${{ (github.event_name == 'workflow_dispatch' && inputs.send_email == false) && '--no-email' || '' }}

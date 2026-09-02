@@ -47,6 +47,7 @@ class CompanyInfo:
 
     corp_code: str = ""
     corp_name: str = ""
+    stock_code: str = ""
     biz_no: str = ""
     corp_reg_no: str = ""
     ceo_name: str = ""
@@ -205,6 +206,7 @@ class DartClient:
         info = CompanyInfo(
             corp_code=corp_code,
             corp_name=(payload.get("corp_name") or "").strip(),
+            stock_code=(payload.get("stock_code") or "").strip(),
             biz_no=format_biz_no(payload.get("bizr_no", "")),
             corp_reg_no=format_corp_reg_no(payload.get("jurir_no", "")),
             ceo_name=(payload.get("ceo_nm") or "").strip(),

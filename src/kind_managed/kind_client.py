@@ -19,17 +19,23 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
-# KIND 시장 구분 코드 (marketType 파라미터)
+# 시장 구분 선택지.
+# 이 엔드포인트는 marketType 파라미터를 지원하지 않아(빈 응답 반환) 받은 뒤 걸러낸다.
 MARKET_CHOICES = {
     "": "전체",
     "stockMkt": "유가증권",
     "kosdaqMkt": "코스닥",
     "konexMkt": "코넥스",
+    "유가증권": "유가증권",
+    "코스닥": "코스닥",
+    "코넥스": "코넥스",
 }
 
 _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _DATE_RE = re.compile(r"(\d{4})\D(\d{1,2})\D(\d{1,2})")
 _TOTAL_RE = re.compile(r'id=["\']totalCount["\'][^>]*value=["\'](\d+)["\']')
+# 페이징 영역: 전체 <em>172</em>건 : <strong>1</strong>/2
+_TOTAL_EM_RE = re.compile(r"전체\s*<em>\s*([\d,]+)\s*</em>\s*건")
 
 # 종목명 셀 안의 아이콘으로 시장을 구분한다.
 # 예: <img src="/images/common/icn_t_yu.gif" alt="유가증권">, icn_t_ko.gif alt="코스닥"
@@ -207,6 +213,9 @@ def _map_from_content(table) -> dict[int, str]:
     for index, value in enumerate(sample):
         if "designated_on" not in mapping.values() and _DATE_RE.search(value):
             mapping[index] = "designated_on"
+    if "designated_on" not in mapping.values():
+        # 지정일이 없는 표는 관리종목 목록이 아니다(예: 오류 페이지의 안내 표).
+        return {}
     remaining = [i for i in range(len(sample)) if i not in mapping]
     if remaining:
         mapping[remaining[0]] = "name"
@@ -292,7 +301,10 @@ def parse_total_count(html: str) -> int | None:
     match = _TOTAL_RE.search(html)
     if match:
         return int(match.group(1))
-    match = re.search(r"총\s*<?[^>]*>?\s*([\d,]+)\s*건", html)
+    match = _TOTAL_EM_RE.search(html)
+    if match:
+        return int(match.group(1).replace(",", ""))
+    match = re.search(r"[총전][체]?\s*<?[^>]*>?\s*([\d,]+)\s*건", html)
     if match:
         return int(match.group(1).replace(",", ""))
     return None
@@ -305,7 +317,7 @@ class KindClient:
         self,
         session: requests.Session | None = None,
         timeout: int = 30,
-        page_size: int = 100,
+        page_size: int = 500,
         max_pages: int = 50,
     ) -> None:
         self.session = session or requests.Session()
@@ -332,7 +344,7 @@ class KindClient:
         response.encoding = response.apparent_encoding or "utf-8"
         return response.text
 
-    def fetch_page(self, page_index: int, market: str = "") -> tuple[list[ManagedStock], int | None]:
+    def fetch_page(self, page_index: int) -> tuple[list[ManagedStock], int | None]:
         """관리종목 목록 한 페이지를 조회한다."""
         payload = {
             "method": "searchAdminIssueSub",
@@ -345,36 +357,33 @@ class KindClient:
             "searchCodeType": "",
             "repIsuSrtCd": "",
             "allRepIsuSrtCd": "",
-            "marketType": market,
         }
         html = self._post(payload)
         return parse_rows(html), parse_total_count(html)
 
     def fetch_managed_stocks(self, market: str = "") -> KindResult:
-        """모든 페이지를 순회해 관리종목 전체 목록을 모은다."""
+        """관리종목 전체 목록을 모은다.
+
+        currentPageSize 를 크게 주면 KIND 가 전체를 한 번에 돌려주므로 보통 1회 요청으로 끝나고,
+        페이지 순회는 안전망으로만 동작한다.
+        """
         if market not in MARKET_CHOICES:
             raise KindError(
                 f"지원하지 않는 시장 구분입니다: {market!r} (가능: {sorted(MARKET_CHOICES)})"
             )
 
-        # 세션 쿠키 확보 목적으로 메인 페이지를 먼저 연다(실패해도 진행).
-        try:
-            self.session.get(MAIN_URL, timeout=self.timeout)
-        except requests.RequestException as exc:
-            log.warning("KIND 메인 페이지 접근 실패(무시하고 진행): %s", exc)
-
         result = KindResult()
         seen: set[tuple[str, str, str]] = set()
 
         for page_index in range(1, self.max_pages + 1):
-            rows, total = self.fetch_page(page_index, market=market)
+            rows, total = self.fetch_page(page_index)
             result.pages_fetched = page_index
             if total is not None:
                 result.total_count = total
 
             new_rows = 0
             for row in rows:
-                key = (row.code or row.name, row.reason, row.designated_on)
+                key = (row.name, row.reason, row.designated_on)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -382,13 +391,16 @@ class KindClient:
                 new_rows += 1
 
             log.info(
-                "KIND %d페이지: 수신 %d건 / 신규 %d건 (누적 %d건)",
+                "KIND %d페이지: 수신 %d건 / 신규 %d건 (누적 %d건 / 전체 %s건)",
                 page_index,
                 len(rows),
                 new_rows,
                 len(result.rows),
+                result.total_count if result.total_count is not None else "?",
             )
 
+            # KIND 는 마지막 페이지를 넘어선 요청에도 같은 내용을 돌려주므로
+            # 신규 행이 없으면 중단한다.
             if not rows or new_rows == 0 or len(rows) < self.page_size:
                 break
             if result.total_count is not None and len(result.rows) >= result.total_count:
@@ -396,9 +408,36 @@ class KindClient:
         else:
             log.warning("최대 페이지 수(%d)에 도달해 조회를 중단했습니다.", self.max_pages)
 
+        self._validate(result)
+
+        if market:
+            label = MARKET_CHOICES[market]
+            before = len(result.rows)
+            result.rows = [row for row in result.rows if row.market == label]
+            log.info("시장 구분 %s 로 한정: %d건 → %d건", label, before, len(result.rows))
+
+        return result
+
+    @staticmethod
+    def _validate(result: KindResult) -> None:
+        """오류 페이지를 목록으로 착각해 발송하는 일이 없도록 결과를 검증한다."""
         if not result.rows:
             raise KindError(
                 "관리종목을 한 건도 파싱하지 못했습니다. "
                 "KIND 페이지 구조가 변경되었거나 접근이 차단되었을 수 있습니다."
             )
-        return result
+
+        dated = sum(1 for row in result.rows if _DATE_RE.fullmatch(row.designated_on or ""))
+        if dated * 2 < len(result.rows):
+            raise KindError(
+                f"파싱 결과가 관리종목 목록으로 보이지 않습니다"
+                f"(전체 {len(result.rows)}건 중 지정일이 확인된 행 {dated}건). "
+                "KIND 가 오류 페이지를 반환했을 수 있습니다."
+            )
+
+        if result.total_count is not None and len(result.rows) < result.total_count:
+            log.warning(
+                "KIND 가 알려준 전체 건수(%d)보다 적게 수집했습니다: %d건",
+                result.total_count,
+                len(result.rows),
+            )

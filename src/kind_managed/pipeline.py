@@ -60,6 +60,9 @@ def collect_rows(
                 row["biz_no"] = info.biz_no
                 row["corp_reg_no"] = info.corp_reg_no
                 row["ceo_name"] = info.ceo_name
+                # KIND 관리종목 표에는 종목코드가 없어 DART 조회 결과로 채운다.
+                if not row["code"] and info.stock_code:
+                    row["code"] = info.stock_code.zfill(6)
             if problem:
                 row["note"] = problem
         rows.append(row)
@@ -70,6 +73,24 @@ def collect_rows(
         len(rows),
     )
     return rows
+
+
+def filter_by_from_date(
+    stocks: list[ManagedStock], from_date: str
+) -> tuple[list[ManagedStock], int]:
+    """지정일이 from_date 이후인 종목만 남긴다(빈 값이면 전체).
+
+    지정일을 읽지 못한 행은 누락을 막기 위해 남겨 둔다.
+    Returns: (남은 종목, 걸러낸 건수)
+    """
+    if not from_date:
+        return stocks, 0
+    kept = [
+        stock
+        for stock in stocks
+        if not stock.designated_on or stock.designated_on >= from_date
+    ]
+    return kept, len(stocks) - len(kept)
 
 
 def _summary_lines(rows: list[dict[str, str]], as_of: str) -> list[str]:
@@ -93,14 +114,20 @@ def _summary_lines(rows: list[dict[str, str]], as_of: str) -> list[str]:
     return lines
 
 
-def build_mail_bodies(rows: list[dict[str, str]], as_of: str, filename: str) -> tuple[str, str]:
+def build_mail_bodies(
+    rows: list[dict[str, str]], as_of: str, filename: str, period: str = ""
+) -> tuple[str, str]:
     """메일 본문(텍스트/HTML)을 만든다."""
     lines = _summary_lines(rows, as_of)
+    if period:
+        lines.insert(1, f"수집 범위: {period}")
     text = "\n".join(
         [
             "안녕하세요.",
             "",
-            f"{as_of} 기준 한국거래소 KIND 관리종목 현황을 전달드립니다.",
+            f"{as_of} 기준 한국거래소 KIND 관리종목 현황"
+            + (f" ({period})" if period else "")
+            + "을 전달드립니다.",
             "",
             *lines,
             "",
@@ -138,7 +165,7 @@ def build_mail_bodies(rows: list[dict[str, str]], as_of: str, filename: str) -> 
     summary_html = "".join(f"<li>{html.escape(line)}</li>" for line in lines[:5])
     body_html = f"""<html><body style="font-family:'맑은 고딕',Malgun Gothic,sans-serif;font-size:14px;color:#222">
 <p>안녕하세요.</p>
-<p><b>{html.escape(as_of)}</b> 기준 한국거래소 KIND 관리종목 현황을 전달드립니다.</p>
+<p><b>{html.escape(as_of)}</b> 기준 한국거래소 KIND 관리종목 현황{html.escape(f" ({period})" if period else "")}을 전달드립니다.</p>
 <ul style="line-height:1.7">{summary_html}</ul>
 {new_section}
 <p>상세 내역은 첨부파일(<b>{html.escape(filename)}</b>)을 확인해 주세요.</p>
@@ -174,6 +201,15 @@ def run(
         stocks = fetched.rows
         log.info("KIND 관리종목 %d건 수집 완료", len(stocks))
 
+    if app_config.from_date:
+        stocks, dropped = filter_by_from_date(stocks, app_config.from_date)
+        log.info(
+            "지정일 %s 이후로 한정: %d건 남음 (%d건 제외)",
+            app_config.from_date,
+            len(stocks),
+            dropped,
+        )
+
     dart: DartClient | None = None
     if app_config.dart_api_key:
         try:
@@ -189,8 +225,11 @@ def run(
 
     rows = collect_rows(stocks, dart, as_of)
 
+    period = f"{app_config.from_date} 이후 지정분" if app_config.from_date else ""
     filename = f"관리종목_{as_of.replace('-', '')}.xlsx"
-    excel = write_excel(rows, Path(app_config.out_dir) / filename, as_of=as_of)
+    excel = write_excel(
+        rows, Path(app_config.out_dir) / filename, as_of=as_of, period=period
+    )
     log.info("엑셀 생성 완료: %s (%d행)", excel.path, excel.row_count)
 
     result = PipelineResult(
@@ -201,8 +240,9 @@ def run(
     )
 
     if send_mail:
-        subject = f"[관리종목] {as_of} 기준 관리종목 현황 ({len(rows)}종목)"
-        text, body_html = build_mail_bodies(rows, as_of, filename)
+        scope = f" {app_config.from_date}~" if app_config.from_date else ""
+        subject = f"[관리종목] {as_of} 기준{scope} 관리종목 현황 ({len(rows)}종목)"
+        text, body_html = build_mail_bodies(rows, as_of, filename, period=period)
         message = build_message(
             mail_config,
             subject=subject,

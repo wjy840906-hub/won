@@ -8,7 +8,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from .config import AppConfig, MailConfig
+from .config import AppConfig, MailConfig, normalize_from_date
 from .dart_client import DartError
 from .kind_client import MARKET_CHOICES, KindError, parse_rows
 from .mailer import MailError
@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=sorted(MARKET_CHOICES),
         help="시장 구분 (기본: 전체). stockMkt=유가증권, kosdaqMkt=코스닥, konexMkt=코넥스",
+    )
+    parser.add_argument(
+        "--from-date",
+        default=None,
+        help="이 날짜 이후 지정분만 수집 (예: 2026-08-01, 2026-08, 8). 기본: FROM_DATE 환경변수",
     )
     parser.add_argument("--out-dir", default=None, help="엑셀 저장 폴더 (기본: out)")
     parser.add_argument(
@@ -64,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     app_config = AppConfig.from_env()
     if args.market is not None:
         app_config = replace(app_config, market=args.market)
+    if args.from_date is not None:
+        try:
+            app_config = replace(app_config, from_date=normalize_from_date(args.from_date))
+        except ValueError as exc:
+            print(f"오류: {exc}", file=sys.stderr)
+            return 2
     if args.out_dir is not None:
         app_config = replace(app_config, out_dir=args.out_dir)
 

@@ -109,3 +109,117 @@ def test_run_can_skip_mail(tmp_path, monkeypatch):
 
     assert result.mail_sent is False
     assert result.excel_path.exists()
+
+
+# ------------------------------------------------------------ 수집 시작일 필터
+
+from kind_managed.config import normalize_from_date
+from kind_managed.pipeline import filter_by_from_date
+
+WIDE_STOCKS = [
+    ManagedStock(name="구건", reason="감사의견 거절", designated_on="2023-03-23", market="유가증권"),
+    ManagedStock(name="칠월건", reason="자본잠식", designated_on="2026-07-31", market="코스닥"),
+    ManagedStock(name="팔월첫날", reason="시가총액 미달", designated_on="2026-08-01", market="유가증권"),
+    ManagedStock(name="팔월건", reason="시가총액 미달", designated_on="2026-08-13", market="유가증권"),
+    ManagedStock(name="구월건", reason="실질심사", designated_on="2026-09-02", market="코스닥"),
+]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("2026-08-01", "2026-08-01"),
+        ("2026-08", "2026-08-01"),
+        ("2026.8", "2026-08-01"),
+        ("20260801", "2026-08-01"),
+        ("202608", "2026-08-01"),
+        ("", ""),
+    ],
+)
+def test_normalize_from_date(raw, expected):
+    assert normalize_from_date(raw) == expected
+
+
+def test_normalize_from_date_rejects_garbage():
+    with pytest.raises(ValueError, match="FROM_DATE"):
+        normalize_from_date("작년쯤")
+
+
+def test_filter_keeps_august_onward():
+    kept, dropped = filter_by_from_date(WIDE_STOCKS, "2026-08-01")
+
+    assert [stock.name for stock in kept] == ["팔월첫날", "팔월건", "구월건"]
+    assert dropped == 2
+
+
+def test_filter_boundary_is_inclusive():
+    kept, _ = filter_by_from_date(WIDE_STOCKS, "2026-08-01")
+    assert "팔월첫날" in [stock.name for stock in kept]
+
+
+def test_filter_without_from_date_keeps_everything():
+    kept, dropped = filter_by_from_date(WIDE_STOCKS, "")
+    assert len(kept) == len(WIDE_STOCKS)
+    assert dropped == 0
+
+
+def test_filter_keeps_rows_with_unparsed_date():
+    """지정일을 읽지 못한 행은 누락을 막기 위해 남긴다."""
+    stocks = [*WIDE_STOCKS, ManagedStock(name="날짜없음", reason="?", designated_on="")]
+    kept, _ = filter_by_from_date(stocks, "2026-08-01")
+    assert "날짜없음" in [stock.name for stock in kept]
+
+
+def test_run_applies_from_date_and_labels_period(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "kind_managed.pipeline.now_kst",
+        lambda: __import__("datetime").datetime(2026, 9, 2),
+    )
+    app_config = AppConfig(
+        dart_api_key="", out_dir=str(tmp_path), cache_dir=str(tmp_path), from_date="2026-08-01"
+    )
+
+    result = run(app_config, MailConfig(), send_mail=False, stocks=WIDE_STOCKS)
+
+    assert result.total == 3
+    sheet = load_workbook(result.excel_path).active
+    assert "2026-08-01 이후 지정분" in sheet.cell(row=1, column=1).value
+
+
+def test_run_subject_shows_period(tmp_path, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(
+        "kind_managed.pipeline.send_message",
+        lambda config, message: sent.update(subject=message["Subject"]),
+    )
+    monkeypatch.setattr(
+        "kind_managed.pipeline.now_kst",
+        lambda: __import__("datetime").datetime(2026, 9, 2),
+    )
+    app_config = AppConfig(
+        dart_api_key="", out_dir=str(tmp_path), cache_dir=str(tmp_path), from_date="2026-08-01"
+    )
+    mail_config = MailConfig(host="smtp.example.com", sender="a@b.com", to=["c@d.com"])
+
+    run(app_config, mail_config, send_mail=True, stocks=WIDE_STOCKS)
+
+    assert sent["subject"] == "[관리종목] 2026-09-02 기준 2026-08-01~ 관리종목 현황 (3종목)"
+
+
+def test_collect_rows_fills_stock_code_from_dart():
+    """KIND 관리종목 표에는 종목코드가 없으므로 DART 조회 결과로 채운다."""
+
+    class _NameMatchingDart:
+        def lookup(self, stock_code="", name=""):
+            from kind_managed.dart_client import CompanyInfo
+
+            assert stock_code == ""  # KIND 가 코드를 주지 않는다
+            return CompanyInfo(corp_code="00126380", stock_code="5930",
+                               biz_no="104-81-18820"), ""
+
+    stock = ManagedStock(name="테스트전자", reason="감사의견 거절",
+                         designated_on="2026-08-13", market="유가증권")
+    rows = collect_rows([stock], _NameMatchingDart(), as_of="2026-09-02")
+
+    assert rows[0]["code"] == "005930"  # 앞자리 0 보정
+    assert rows[0]["biz_no"] == "104-81-18820"
