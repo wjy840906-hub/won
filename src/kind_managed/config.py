@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -34,6 +35,43 @@ def _env_bool(name: str, default: bool) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "y", "on"}
+
+
+def normalize_from_date(raw: str) -> str:
+    """수집 시작일 표기를 YYYY-MM-DD 로 통일한다.
+
+    허용: '2026-08-01', '20260801', '2026-08', '202608', '8'(올해 8월).
+    빈 값이면 제한 없음(전체).
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+
+    match = re.fullmatch(r"(\d{4})[-./](\d{1,2})[-./](\d{1,2})", text)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{int(month):02d}-{int(day):02d}"
+
+    match = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", text)
+    if match:
+        year, month, day = match.groups()
+        return f"{year}-{month}-{day}"
+
+    match = re.fullmatch(r"(\d{4})[-./](\d{1,2})", text)
+    if match:
+        year, month = match.groups()
+        return f"{year}-{int(month):02d}-01"
+
+    match = re.fullmatch(r"(\d{4})(\d{2})", text)
+    if match:
+        year, month = match.groups()
+        return f"{year}-{month}-01"
+
+    match = re.fullmatch(r"(\d{1,2})", text)
+    if match and 1 <= int(match.group(1)) <= 12:
+        return f"{now_kst().year}-{int(match.group(1)):02d}-01"
+
+    raise ValueError(f"FROM_DATE 형식을 알 수 없습니다: {raw!r} (예: 2026-08-01, 2026-08, 8)")
 
 
 def _env_list(name: str, default: str = "") -> list[str]:
@@ -100,6 +138,7 @@ class AppConfig:
 
     dart_api_key: str = ""
     market: str = ""
+    from_date: str = ""
     out_dir: str = "out"
     cache_dir: str = ".cache"
     request_timeout: int = 30
@@ -111,6 +150,7 @@ class AppConfig:
         return cls(
             dart_api_key=_env("DART_API_KEY"),
             market=_env("KIND_MARKET"),
+            from_date=normalize_from_date(_env("FROM_DATE")),
             out_dir=_env("OUT_DIR", "out"),
             cache_dir=_env("CACHE_DIR", ".cache"),
             request_timeout=_env_int("REQUEST_TIMEOUT", 30),

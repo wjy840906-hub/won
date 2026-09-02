@@ -31,12 +31,16 @@ _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _DATE_RE = re.compile(r"(\d{4})\D(\d{1,2})\D(\d{1,2})")
 _TOTAL_RE = re.compile(r'id=["\']totalCount["\'][^>]*value=["\'](\d+)["\']')
 
-# 회사명 셀 안의 이미지로 시장을 구분한다 (예: /images/common/img_kosdaq.gif)
+# 종목명 셀 안의 아이콘으로 시장을 구분한다.
+# 예: <img src="/images/common/icn_t_yu.gif" alt="유가증권">, icn_t_ko.gif alt="코스닥"
+MARKET_LABELS = ("유가증권", "코스닥", "코넥스")
 _MARKET_HINTS = (
+    ("icn_t_yu", "유가증권"),
+    ("icn_t_ko", "코스닥"),
+    ("icn_t_kx", "코넥스"),
     ("konex", "코넥스"),
     ("kosdaq", "코스닥"),
     ("kospi", "유가증권"),
-    ("stock", "유가증권"),
     ("yuga", "유가증권"),
 )
 
@@ -104,9 +108,22 @@ def normalize_date(text: str) -> str:
     return cleaned
 
 
+def _market_from_cell(cell) -> str:
+    """셀 안 아이콘의 alt / 파일명으로 시장 구분을 알아낸다."""
+    for image in cell.find_all("img"):
+        alt = _clean(image.get("alt", ""))
+        if alt in MARKET_LABELS:
+            return alt
+        source = (image.get("src") or "").lower()
+        for hint, label in _MARKET_HINTS:
+            if hint in source:
+                return label
+    return _guess_market(str(cell))
+
+
 def _guess_market(html_fragment: str) -> str:
     lowered = html_fragment.lower()
-    for label in ("유가증권", "코스닥", "코넥스"):
+    for label in MARKET_LABELS:
         if label in html_fragment:
             return label
     for hint, label in _MARKET_HINTS:
@@ -130,8 +147,23 @@ def _extract_code(cell) -> str:
     return ""
 
 
-def _header_map(table) -> dict[int, str]:
-    """표 헤더를 읽어 컬럼 인덱스 → 내부 필드명 매핑을 만든다."""
+def _map_labels(labels: list[str]) -> dict[int, str]:
+    """컬럼 라벨 목록을 인덱스 → 내부 필드명 매핑으로 바꾼다."""
+    mapping: dict[int, str] = {}
+    for index, label in enumerate(labels):
+        field_name = _HEADER_ALIASES.get(label)
+        if field_name is None:
+            for alias, candidate in _HEADER_ALIASES.items():
+                if alias in label:
+                    field_name = candidate
+                    break
+        if field_name and field_name not in mapping.values():
+            mapping[index] = field_name
+    return mapping
+
+
+def _map_from_headers(table) -> dict[int, str]:
+    """<th> 헤더에서 컬럼 매핑을 만든다. KIND 처럼 헤더가 비어 있으면 {} 를 준다."""
     header_row = None
     thead = table.find("thead")
     if thead:
@@ -143,27 +175,65 @@ def _header_map(table) -> dict[int, str]:
                 break
     if header_row is None:
         return {}
+    labels = [_clean(cell.get_text()) for cell in header_row.find_all(["th", "td"])]
+    return _map_labels(labels) if any(labels) else {}
+
+
+def _map_from_summary(table) -> dict[int, str]:
+    """summary 속성에서 컬럼 순서를 읽는다.
+
+    KIND 는 헤더를 JS 로 채우기 때문에 <th> 가 비어 있고,
+    대신 <table summary="종목명, 지정일, 지정사유"> 가 컬럼 순서를 알려준다.
+    """
+    summary = _clean(table.get("summary", ""))
+    if not summary or "," not in summary:
+        return {}
+    return _map_labels([part.strip() for part in summary.split(",")])
+
+
+def _map_from_content(table) -> dict[int, str]:
+    """헤더도 summary 도 없을 때, 본문 첫 행의 값 모양으로 컬럼을 추정한다."""
+    body = table.find("tbody") or table
+    sample = None
+    for row in body.find_all("tr"):
+        cells = row.find_all("td")
+        if cells:
+            sample = [_clean(cell.get_text(" ")) for cell in cells]
+            break
+    if not sample:
+        return {}
 
     mapping: dict[int, str] = {}
-    for index, cell in enumerate(header_row.find_all(["th", "td"])):
-        label = _clean(cell.get_text())
-        field_name = _HEADER_ALIASES.get(label)
-        if field_name is None:
-            for alias, candidate in _HEADER_ALIASES.items():
-                if alias and alias in label:
-                    field_name = candidate
-                    break
-        if field_name and field_name not in mapping.values():
-            mapping[index] = field_name
+    for index, value in enumerate(sample):
+        if "designated_on" not in mapping.values() and _DATE_RE.search(value):
+            mapping[index] = "designated_on"
+    remaining = [i for i in range(len(sample)) if i not in mapping]
+    if remaining:
+        mapping[remaining[0]] = "name"
+    rest = [i for i in remaining[1:] if sample[i]]
+    if rest:
+        # 남은 칸 중 가장 서술적인(긴) 값을 지정사유로 본다.
+        mapping[max(rest, key=lambda i: len(sample[i]))] = "reason"
     return mapping
 
 
+def _column_map(table) -> dict[int, str]:
+    """표의 컬럼 매핑을 헤더 → summary → 내용 순서로 시도한다."""
+    for builder in (_map_from_headers, _map_from_summary, _map_from_content):
+        mapping = builder(table)
+        if "name" in mapping.values() and len(set(mapping.values())) >= 2:
+            return mapping
+    return {}
+
+
 def _pick_table(soup: BeautifulSoup):
-    """관리종목 목록 표를 고른다(헤더에 회사명/종목명이 있는 표)."""
+    """관리종목 목록 표와 그 컬럼 매핑을 고른다."""
     best = None
     best_score = 0
     for table in soup.find_all("table"):
-        mapping = _header_map(table)
+        if not (table.find("tbody") or table.find("td")):
+            continue
+        mapping = _column_map(table)
         fields = set(mapping.values())
         if "name" not in fields:
             continue
@@ -182,6 +252,8 @@ def parse_rows(html: str) -> list[ManagedStock]:
     table, mapping = picked
 
     body = table.find("tbody") or table
+    name_index = next((i for i, f in mapping.items() if f == "name"), 0)
+
     rows: list[ManagedStock] = []
     for tr in body.find_all("tr"):
         cells = tr.find_all("td")
@@ -190,21 +262,18 @@ def parse_rows(html: str) -> list[ManagedStock]:
         values = {"name": "", "reason": "", "designated_on": "", "code": "", "market": ""}
         for index, cell in enumerate(cells):
             field_name = mapping.get(index)
-            if field_name is None:
-                continue
-            values[field_name] = _clean(cell.get_text(" "))
+            if field_name is not None:
+                values[field_name] = _clean(cell.get_text(" "))
 
         if not values["name"]:
             continue
 
-        name_cell = next(
-            (cells[i] for i, f in mapping.items() if f == "name" and i < len(cells)),
-            cells[0],
-        )
+        name_cell = cells[name_index] if name_index < len(cells) else cells[0]
         if not values["code"]:
-            values["code"] = _extract_code(name_cell) or _extract_code(tr)
+            # KIND 관리종목 표에는 종목코드가 없지만, 다른 화면을 파싱할 때를 위해 남겨 둔다.
+            values["code"] = _extract_code(name_cell)
         if not values["market"]:
-            values["market"] = _guess_market(str(name_cell)) or _guess_market(str(tr))
+            values["market"] = _market_from_cell(name_cell)
 
         rows.append(
             ManagedStock(
