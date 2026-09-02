@@ -1,0 +1,45 @@
+<div class="paging_wrap">
+	<input type="hidden" id="totalCount" value="3">
+	<p class="info_txt">총 <span class="blue">3</span>건</p>
+</div>
+<table class="list type-00 mt10" summary="관리종목">
+	<caption>관리종목</caption>
+	<colgroup><col width="7%"><col width="25%"><col width="*"><col width="13%"></colgroup>
+	<thead>
+		<tr>
+			<th scope="col">번호</th>
+			<th scope="col">회사명</th>
+			<th scope="col">지정사유</th>
+			<th scope="col">지정일</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td class="txc">1</td>
+			<td id="companysum">
+				<a href="#viewer" onclick="companysummary_open('095570'); return false;" title="회사정보 조회">에이제이네트웍스</a>
+				<img src="/images/common/img_kospi.gif" alt="유가증권" width="15" height="15">
+			</td>
+			<td class="txt">감사의견 거절</td>
+			<td class="txc">2026-09-02</td>
+		</tr>
+		<tr>
+			<td class="txc">2</td>
+			<td id="companysum">
+				<a href="#viewer" onclick="companysummary_open('900110'); return false;" title="회사정보 조회">이스트아시아홀딩스</a>
+				<img src="/images/common/img_kosdaq.gif" alt="코스닥" width="15" height="15">
+			</td>
+			<td class="txt">자본잠식률 50% 이상</td>
+			<td class="txc">2026.03.20</td>
+		</tr>
+		<tr>
+			<td class="txc">3</td>
+			<td id="companysum">
+				<a href="#viewer" onclick="companysummary_open('217500'); return false;" title="회사정보 조회">엔에이치기업인수목적</a>
+				<img src="/images/common/img_konex.gif" alt="코넥스" width="15" height="15">
+			</td>
+			<td class="txt">최근 사업연도 매출액 30억원 미만</td>
+			<td class="txc">20250415</td>
+		</tr>
+	</tbody>
+</table>

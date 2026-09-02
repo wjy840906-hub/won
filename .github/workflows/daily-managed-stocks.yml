@@ -1,0 +1,64 @@
+name: 관리종목 일일 메일 발송
+
+on:
+  schedule:
+    # UTC 23:00 (월~금 KST 08:00) — 일~목 UTC 가 한국 시간 월~금에 해당합니다.
+    - cron: "0 23 * * 0-4"
+  workflow_dispatch:
+    inputs:
+      market:
+        description: "시장 구분 (빈 값=전체, stockMkt, kosdaqMkt, konexMkt)"
+        required: false
+        default: ""
+      send_email:
+        description: "메일 발송 여부"
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: managed-stocks-daily
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 관리종목 수집 → 엑셀 → 메일 발송
+        env:
+          PYTHONPATH: src
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          SMTP_USE_STARTTLS: ${{ vars.SMTP_USE_STARTTLS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ vars.MAIL_TO || 'wonjiyun@hanafn.com' }}
+          MAIL_CC: ${{ vars.MAIL_CC }}
+          KIND_MARKET: ${{ inputs.market }}
+        run: |
+          python -m kind_managed \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.send_email == false) && '--no-email' || '' }}
+
+      - name: 생성된 엑셀 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-stocks-xlsx
+          path: out/*.xlsx
+          if-no-files-found: warn
+          retention-days: 30
