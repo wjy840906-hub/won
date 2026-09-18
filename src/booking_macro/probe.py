@@ -74,10 +74,32 @@ EXTRACT_JS = """
     src: clean(el.getAttribute('src')),
   }));
 
+  // 예약 표의 뼈대. click_cell 에 쓸 열 이름(colspan 포함)과 행 이름을 본다.
+  const tables = [...document.querySelectorAll('table')].slice(0, 6).map((table) => {
+    const rows = [...table.rows];
+    return {
+      id: clean(table.id),
+      cls: clean(table.getAttribute('class')),
+      rowCount: rows.length,
+      header: rows.slice(0, 3).map((line) =>
+        [...line.cells].map((cell) => ({ text: clean(cell.innerText), span: cell.colSpan || 1 }))
+      ),
+      // 행마다 어떤 값들이 있는지(중복 제거). click_cell 의 row 에 뭘 적어야
+      // 하는지 바로 보이도록 — 시간표라면 ['×', '06:00~07:00'] 처럼 나온다.
+      rowSamples: rows.slice(0, 30).map((line) => {
+        const 값 = [...new Set([...line.cells].map((cell) => clean(cell.innerText)))];
+        return 값.filter(Boolean).slice(0, 4);
+      }).filter((값) => 값.length),
+      pressable: table.querySelectorAll(
+        'a, button, input:not([type=hidden]), select, [onclick]'
+      ).length,
+    };
+  });
+
   return {
     title: clean(document.title),
     url: location.href,
-    inputs, selects, buttons, forms, iframes,
+    inputs, selects, buttons, forms, iframes, tables,
     textSample: clean(document.body ? document.body.innerText : '').slice(0, 300),
   };
 }
@@ -263,6 +285,25 @@ def format_report(data: dict[str, Any]) -> str:
             lines.append(f"  {이름:<24} {form.get('method', 'get').upper()} {form.get('action') or '(현재 주소)'}")
             if form.get("fields"):
                 lines.append(f"    보내는 값: {', '.join(form['fields'][:20])}")
+
+    tables = [item for item in (data.get("tables") or []) if item.get("rowCount", 0) > 1]
+    if tables:
+        lines.append(_section(f"표 {len(tables)}개 — click_cell 에 쓸 이름"))
+        for index, table in enumerate(tables, start=1):
+            이름 = table.get("id") or table.get("cls") or f"{index}번째 표"
+            lines.append(
+                f"  [{이름}] {table.get('rowCount')}행 · 누를 수 있는 것 {table.get('pressable')}개"
+            )
+            for 줄 in table.get("header") or []:
+                조각 = [
+                    f"{cell['text'] or '(빈칸)'}" + (f"×{cell['span']}" if cell.get("span", 1) > 1 else "")
+                    for cell in 줄
+                ]
+                if 조각:
+                    lines.append("    열: " + " | ".join(조각[:14]))
+            for 값 in (table.get("rowSamples") or [])[:8]:
+                lines.append("    행: " + " / ".join(값))
+        lines.append("    → click_cell 의 column 에는 '열', row 에는 '행' 이름을 그대로 적으세요.")
 
     draft = draft_login_steps(data)
     if draft:

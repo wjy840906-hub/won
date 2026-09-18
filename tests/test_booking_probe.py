@@ -329,3 +329,74 @@ def test_화면을_끝내_못_찍어도_진단은_끝난다(진단페이지):
     assert "#mbrId" in 보고서
     assert "화면 저장" not in 보고서
     assert "HTML 저장" in 보고서
+
+
+# -- 표 구조 · 브라우저 콘솔 스니펫 ---------------------------------------------
+
+
+표화면 = {
+    "title": "다락원체육공원",
+    "url": "https://example.or.kr/rent",
+    "inputs": [],
+    "selects": [],
+    "buttons": [],
+    "forms": [],
+    "iframes": [],
+    "textSample": "",
+    "tables": [
+        {
+            "id": "rsvTable",
+            "cls": "",
+            "rowCount": 18,
+            "pressable": 3,
+            "header": [
+                [{"text": "실내코트1", "span": 2}, {"text": "실외코트5", "span": 2}],
+                [{"text": "선택", "span": 1}, {"text": "시간", "span": 1}],
+            ],
+            "rowSamples": [["×", "09:00~10:00"], ["×", "10:00~11:00"]],
+        }
+    ],
+}
+
+
+def test_표의_열과_행_이름을_보여_준다():
+    보고서 = format_report(표화면)
+
+    assert "표 1개" in 보고서
+    assert "rsvTable" in 보고서
+    assert "실내코트1×2" in 보고서          # 두 줄 헤더의 colspan 이 드러난다
+    assert "09:00~10:00" in 보고서
+    assert "click_cell 의 column" in 보고서
+
+
+def test_한_줄짜리_표는_보고서에_넣지_않는다():
+    화면 = {**표화면, "tables": [{**표화면["tables"][0], "rowCount": 1}]}
+
+    assert "click_cell 에 쓸 이름" not in format_report(화면)
+
+
+def test_콘솔_스니펫이_추출기와_어긋나지_않았다():
+    # 스니펫은 probe.EXTRACT_JS 를 그대로 끼워 만든다. 한쪽만 고치면 여기서 잡힌다.
+    import subprocess
+    import sys
+
+    뿌리 = Path(__file__).resolve().parents[1]
+    결과 = subprocess.run(
+        [sys.executable, "tools/build_snippet.py", "--check"],
+        cwd=뿌리, capture_output=True, text=True,
+    )
+
+    assert 결과.returncode == 0, 결과.stderr
+
+
+def test_콘솔_스니펫은_붙여_넣으면_바로_도는_모양이다():
+    스니펫 = (Path(__file__).resolve().parents[1] / "tools" / "probe-snippet.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 스니펫.lstrip().startswith("//")       # 쓰는 법이 맨 위에 있다
+    assert "(() => {" in 스니펫                   # 즉시 실행식 — 붙여 넣으면 바로 돈다
+    assert "copy(글)" in 스니펫                   # 클립보드로 복사
+    assert "querySelectorAll" in 스니펫           # 추출기가 실제로 들어 있다
+    # 입력칸의 값은 아예 읽지 않는다 — 비밀번호가 결과에 섞일 수 없다.
+    assert ".value" not in 스니펫
