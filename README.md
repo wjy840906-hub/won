@@ -259,6 +259,13 @@ HTML 원문과 전체 화면 그림도 `out/booking/` 에 남으므로, 나중�
 파이썬을 깔지 않고도 **Actions 탭 → `예약 사이트 화면 진단` → Run workflow** 로
 같은 진단을 돌릴 수 있습니다(주소만 넣으면 됩니다).
 
+> **사이트가 안 열리거나 느리다면** — 한국 공공기관 사이트는 해외 IP 를 막아 두는 경우가
+> 많아, **GitHub Actions 러너(해외)에서는 접속이 안 될 수 있습니다.** 그럴 때는 국내에서,
+> 즉 내 PC 에서 직접 돌려야 합니다. 화면은 그려졌는데 추적 스크립트가 끝나지 않아
+> 멈추는 경우는 기본값(`domcontentloaded`)으로 이미 넘어가며, 그래도 안 되면
+> `BOOKING_PROBE_TIMEOUT_MS=120000` 으로 시간을 늘리거나 `BOOKING_WAIT_UNTIL=commit` 을 쓰세요.
+> 끝까지 못 불러온 화면도 그려진 만큼은 진단해서 보여 줍니다.
+
 > **iframe 이 있다고 나오면** 예약 화면이 그 안에 들어 있다는 뜻입니다.
 > 지금 시나리오 문법은 iframe 안을 다루지 못하므로, 보고서에 찍힌 `src` 주소로
 > 직접 접속되는지 먼저 확인하고 그 주소를 `base_url`/`url` 로 쓰세요.
@@ -433,6 +440,8 @@ reserve:
 | `BOOKING_SCREENSHOT` | `change` | `always` · `change` · `never` |
 | `BOOKING_STATE_FILE` | (없음) | 로그인 쿠키 저장 경로. 두면 다음 실행에서 로그인 생략 |
 | `BOOKING_NAV_TIMEOUT_MS` / `BOOKING_STEP_TIMEOUT_MS` | `20000` / `10000` | 대기 시간 |
+| `BOOKING_WAIT_UNTIL` | `domcontentloaded` | 페이지 이동을 어디까지 기다릴지 |
+| `BOOKING_PROBE_TIMEOUT_MS` | `60000` | `--probe` 가 화면을 여는 데 쓸 시간 |
 | `PLAYWRIGHT_EXECUTABLE_PATH` | (없음) | 브라우저 실행 파일을 직접 지정할 때 |
 
 메일 발송은 관리종목 리포트와 **같은 SMTP 설정**(`SMTP_HOST`, `MAIL_TO` …)을 씁니다.
@@ -481,7 +490,7 @@ src/booking_macro/
 python -m pytest
 ```
 
-예약 매크로 쪽 127개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
+예약 매크로 쪽 133개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
 로그인 실패·마감 감지·후보 넘어가기·재시도·모의 실행을 검증하고, 시나리오 파싱 오류
 메시지와 자격증명이 로그·메일에 남지 않는지도 확인합니다. `--probe` 가 만든 로그인 초안이
 그대로 시나리오로 읽히는지, 표에서 칸을 고르는 `click_cell` 이 마감과 오류를 구분하는지도

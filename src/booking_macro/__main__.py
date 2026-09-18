@@ -12,7 +12,7 @@ from kind_managed.config import MailConfig
 from .browser import BrowserError, open_page
 from .config import BookingConfig, now_kst, scenario_env
 from .notify import notify
-from .probe import probe_url
+from .probe import ProbeError, probe_url
 from .runner import Outcome, run_scenario
 from .scenario import ACTIONS, ScenarioError, load_scenario
 from .scheduler import resolve_open_at
@@ -80,6 +80,9 @@ def run_probe(args: argparse.Namespace) -> int:
             print(probe_url(page, args.probe, config, tuple(args.probe_click or ())))
     except BrowserError as exc:
         print(f"브라우저 오류: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except ProbeError as exc:
+        print(f"진단 실패: {exc}", file=sys.stderr)
         return EXIT_ERROR
     except Exception as exc:  # noqa: BLE001 - 진단 도구이므로 이유만 보여 준다
         print(f"진단 실패: {type(exc).__name__}: {exc}", file=sys.stderr)

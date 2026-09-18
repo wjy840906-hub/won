@@ -244,7 +244,8 @@ def take_screenshot(page: Any, context: StepContext, name: str) -> Path | None:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{safe}.png"
     try:
-        page.screenshot(path=str(path))
+        # 로딩이 끝나지 않는 화면에서 오래 붙잡히지 않도록 시간을 제한한다.
+        page.screenshot(path=str(path), timeout=min(context.config.step_timeout_ms, 5000))
     except Exception as exc:  # noqa: BLE001 - 진단용이므로 실패를 삼킨다
         log.warning("화면 저장 실패(%s): %s", path, exc)
         return None
@@ -265,7 +266,11 @@ def run_step(page: Any, step: Step, context: StepContext, where: str) -> None:
         return
 
     if action == "goto":
-        page.goto(context.absolute(value), timeout=context.config.nav_timeout_ms)
+        page.goto(
+            context.absolute(value),
+            timeout=context.config.nav_timeout_ms,
+            wait_until=context.config.wait_until,
+        )
     elif action == "fill":
         page.fill(selector, value, timeout=timeout)
     elif action == "click":

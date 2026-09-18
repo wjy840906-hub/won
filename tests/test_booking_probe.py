@@ -225,3 +225,107 @@ def test_진단_결과를_파일로_남긴다(진단페이지):
     저장된 = sorted(path.name for path in Path(config.out_dir).iterdir())
     assert 저장된 == ["probe-yeyak_example_or_kr-1단계.html", "probe-yeyak_example_or_kr-1단계.png"]
     assert "HTML 저장" in 보고서
+
+
+# -- 느리거나 닿지 않는 사이트 -------------------------------------------------
+
+
+def test_끝까지_못_불러와도_그려진_만큼_진단한다(진단페이지):
+    from fake_page import FakeTimeout
+
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+    page.fail_on = {"https://느린.example.or.kr": "Timeout 20000ms exceeded"}
+    page.text = "로그인" * 60  # 화면은 그려졌다
+
+    보고서 = probe_url(page, "https://느린.example.or.kr", config)
+
+    assert "주의" in 보고서
+    assert "끝까지 불러오지는 못했습니다" in 보고서
+    assert "BOOKING_PROBE_TIMEOUT_MS" in 보고서
+    assert "#mbrId" in 보고서  # 그래도 진단 결과는 나온다
+
+
+def test_아무것도_못_열면_해외_IP_차단을_먼저_짚어_준다(진단페이지):
+    from booking_macro.probe import ProbeError, probe_url
+
+    page, config = 진단페이지
+    page.fail_on = {"https://막힌.example.or.kr": "Timeout 20000ms exceeded"}
+    page.text = ""  # 아무것도 그려지지 않았다
+
+    with pytest.raises(ProbeError) as error:
+        probe_url(page, "https://막힌.example.or.kr", config)
+
+    안내 = str(error.value)
+    assert "해외 IP" in 안내
+    assert "GitHub Actions 러너는 해외에 있으므로" in 안내
+    assert "BOOKING_PROBE_TIMEOUT_MS" in 안내
+    assert "BOOKING_WAIT_UNTIL=commit" in 안내
+
+
+def test_진단은_넉넉한_시간과_domcontentloaded_로_연다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+    열린_것 = {}
+    원래 = page.goto
+
+    def 기록(url, **kwargs):
+        열린_것.update(kwargs)
+        원래(url, **kwargs)
+
+    page.goto = 기록
+
+    probe_url(page, "https://example.or.kr", config)
+
+    assert 열린_것["timeout"] == 60000
+    assert 열린_것["wait_until"] == "domcontentloaded"
+
+
+def test_화면을_찍기_전에_남은_요청을_끊는다(진단페이지):
+    from booking_macro.probe import _save_screenshot
+
+    page, config = 진단페이지
+    page.evaluate_result = None
+
+    assert _save_screenshot(page, Path(config.out_dir) / "x.png", config) is True
+    끊었나 = [call for call in page.evaluate_args if call is None]
+    assert page.actions[0] == ("evaluate", "", "")  # window.stop() 먼저
+    assert page.screenshots and page.screenshots[0].exists()
+
+
+def test_전체화면이_안_되면_보이는_부분만이라도_남긴다(진단페이지, monkeypatch):
+    from booking_macro.probe import _save_screenshot
+
+    page, config = 진단페이지
+    시도 = []
+
+    def 전체화면만_실패(path, full_page=False, **kwargs):
+        시도.append(full_page)
+        if full_page:
+            raise RuntimeError("Timeout")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_bytes(b"png")
+
+    page.screenshot = 전체화면만_실패
+
+    assert _save_screenshot(page, Path(config.out_dir) / "x.png", config) is True
+    assert 시도 == [True, False]
+
+
+def test_화면을_끝내_못_찍어도_진단은_끝난다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+
+    def 항상_실패(*args, **kwargs):
+        raise RuntimeError("Timeout")
+
+    page.screenshot = 항상_실패
+
+    보고서 = probe_url(page, "https://example.or.kr", config)
+
+    assert "#mbrId" in 보고서
+    assert "화면 저장" not in 보고서
+    assert "HTML 저장" in 보고서

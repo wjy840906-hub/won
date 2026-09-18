@@ -97,8 +97,11 @@ class BookingResult:
 def _run_login(page: Any, phase: Phase, context: StepContext) -> None:
     """로그인 단계를 실행하고 성공 조건을 확인한다."""
     if phase.url:
-        page.goto(context.absolute(context.resolve(phase.url, "login.url")),
-                  timeout=context.config.nav_timeout_ms)
+        page.goto(
+            context.absolute(context.resolve(phase.url, "login.url")),
+            timeout=context.config.nav_timeout_ms,
+            wait_until=context.config.wait_until,
+        )
     try:
         run_steps(page, phase.steps, context, "login")
     except StepError as exc:
@@ -135,8 +138,11 @@ def _attempt_target(
 
     try:
         if phase.url:
-            page.goto(context.absolute(context.resolve(phase.url, "reserve.url")),
-                      timeout=config.nav_timeout_ms)
+            page.goto(
+                context.absolute(context.resolve(phase.url, "reserve.url")),
+                timeout=config.nav_timeout_ms,
+                wait_until=config.wait_until,
+            )
         run_steps(page, phase.steps, context, "reserve")
     except SlotUnavailable as exc:
         # 코드가 잘못된 것이 아니라 그 자리가 안 되는 것이다. 다음 후보로 넘어간다.

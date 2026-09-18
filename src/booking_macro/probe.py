@@ -156,6 +156,52 @@ def draft_login_steps(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+class ProbeError(RuntimeError):
+    """진단할 화면을 열지 못했을 때."""
+
+
+def _has_content(page: Any) -> bool:
+    """뭐라도 그려졌는지(빈 about:blank 가 아닌지)."""
+    try:
+        return len((page.content() or "").strip()) > 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _접속_실패_안내(url: str, exc: Exception) -> str:
+    return (
+        f"{url} 을(를) 열지 못했습니다 — {type(exc).__name__}: {exc}\n"
+        "  짚어 볼 것:\n"
+        "  1) 이 사이트가 해외 IP 를 막고 있을 수 있습니다. 공공기관 사이트에 흔합니다.\n"
+        "     GitHub Actions 러너는 해외에 있으므로, 이 경우 국내에서 직접 돌려야 합니다.\n"
+        "  2) 사이트가 느린 것이라면 시간을 늘려 보세요: BOOKING_PROBE_TIMEOUT_MS=120000\n"
+        "  3) load 가 끝나지 않는 화면이면: BOOKING_WAIT_UNTIL=commit"
+    )
+
+
+def _save_screenshot(page: Any, path: Path, config: BookingConfig) -> bool:
+    """화면을 남긴다. 전체 화면이 안 되면 보이는 부분만이라도 남긴다.
+
+    full_page 는 Chromium 이 로딩이 끝나기를 기다리므로, 끝나지 않는 화면에서는
+    그대로 멈춘다. 진단이 목적이니 절반이라도 건지는 편이 낫다.
+    """
+    timeout = min(config.step_timeout_ms, SETTLE_MS)
+    # 로딩이 끝나지 않으면 Chromium 이 화면을 찍어 주지 않는다. 필요한 내용은
+    # 이미 읽어 둔 뒤이므로, 남은 요청을 끊고 지금 보이는 대로 찍는다.
+    try:
+        page.evaluate("() => window.stop()")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("로딩 중단 실패: %s", exc)
+    for 전체화면 in (True, False):
+        try:
+            page.screenshot(path=str(path), full_page=전체화면, timeout=timeout)
+            return True
+        except Exception as exc:  # noqa: BLE001 - 진단용이라 실패해도 계속 간다
+            log.debug("화면 저장 실패(full_page=%s): %s", 전체화면, exc)
+    log.warning("화면을 저장하지 못했습니다: %s", path)
+    return False
+
+
 def _current_url(page: Any) -> str:
     try:
         return str(page.url)
@@ -226,10 +272,15 @@ def format_report(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# 통신이 잦아들기를 기다리는 시간. 추적 스크립트가 끝나지 않는 화면이 흔하므로
+# 여기서 오래 붙잡지 않는다 — 어차피 그려진 내용만 있으면 진단할 수 있다.
+SETTLE_MS = 3000
+
+
 def _settle(page: Any, config: BookingConfig) -> None:
     """화면이 자리잡을 때까지 잠깐 기다린다(끝나지 않아도 넘어간다)."""
     try:
-        page.wait_for_load_state("networkidle", timeout=config.step_timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=min(config.step_timeout_ms, SETTLE_MS))
     except Exception:  # noqa: BLE001 - 계속 통신하는 화면이면 그냥 넘어간다
         log.debug("networkidle 대기를 건너뜁니다.")
 
@@ -246,7 +297,14 @@ def probe_url(
     도착한 화면을 뜯어본다(--probe-click). 누르는 것은 이동·조회 뿐이라고
     보고, 예약을 확정하는 버튼은 넣지 말아야 한다.
     """
-    page.goto(url, timeout=config.nav_timeout_ms)
+    덜_불러옴 = ""
+    try:
+        page.goto(url, timeout=config.probe_timeout_ms, wait_until=config.wait_until)
+    except Exception as exc:  # noqa: BLE001 - 느린 사이트라도 그려진 만큼은 진단한다
+        if not _has_content(page):
+            raise ProbeError(_접속_실패_안내(url, exc)) from exc
+        덜_불러옴 = f"{type(exc).__name__} — 화면을 끝까지 불러오지는 못했습니다"
+        log.warning("페이지를 끝까지 불러오지 못했지만 그려진 내용으로 진단합니다: %s", exc)
     _settle(page, config)
 
     걸어온_길: list[str] = []
@@ -261,6 +319,8 @@ def probe_url(
 
     data = page.evaluate(EXTRACT_JS)
     report = format_report(data)
+    if 덜_불러옴:
+        report = _section("주의") + f"\n  {덜_불러옴}\n  (아래 내용이 비어 있으면 시간을 늘려 보세요: BOOKING_PROBE_TIMEOUT_MS=120000)" + report
     if 걸어온_길:
         길 = "\n".join(f"  {index}. {걸음}" for index, 걸음 in enumerate(걸어온_길, start=1))
         report = _section("따라간 경로") + "\n" + 길 + report
@@ -276,10 +336,8 @@ def probe_url(
         report += f"\n\n  (HTML 저장: {html_path})"
     except Exception as exc:  # noqa: BLE001
         log.warning("HTML 저장 실패: %s", exc)
-    try:
-        page.screenshot(path=str(directory / f"{stem}.png"), full_page=True)
-        report += f"\n  (화면 저장: {directory / f'{stem}.png'})"
-    except Exception as exc:  # noqa: BLE001
-        log.warning("화면 저장 실패: %s", exc)
+    shot_path = directory / f"{stem}.png"
+    if _save_screenshot(page, shot_path, config):
+        report += f"\n  (화면 저장: {shot_path})"
 
     return report

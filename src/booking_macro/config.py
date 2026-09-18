@@ -13,6 +13,11 @@ from kind_managed.config import KST, now_kst  # noqa: F401  (다른 모듈에서
 
 BROWSERS = ("chromium", "firefox", "webkit")
 
+# 페이지 이동을 어디까지 기다릴지.
+# 기본값을 load 가 아니라 domcontentloaded 로 둔다. 공공기관 사이트는 화면이 다
+# 그려진 뒤에도 추적 스크립트·플러그인이 남아 load 가 끝내 오지 않는 일이 잦다.
+WAIT_UNTIL = ("commit", "domcontentloaded", "load", "networkidle")
+
 # 시나리오에 넘길 환경변수 이름 규칙 — 자격증명 전체가 아니라 이 접두사만 노출한다.
 ENV_PREFIXES = ("BOOKING_", "RESERVE_")
 
@@ -57,6 +62,8 @@ class BookingConfig:
     slow_mo_ms: int = 0
     nav_timeout_ms: int = 20000
     step_timeout_ms: int = 10000
+    wait_until: str = "domcontentloaded"
+    probe_timeout_ms: int = 60000
     out_dir: str = "out/booking"
     screenshot: str = "change"  # always | change | never
     state_file: str = ""  # 로그인 세션 저장 경로(비우면 매번 로그인)
@@ -77,6 +84,8 @@ class BookingConfig:
             slow_mo_ms=_env_int("BOOKING_SLOW_MO_MS", 0),
             nav_timeout_ms=_env_int("BOOKING_NAV_TIMEOUT_MS", 20000),
             step_timeout_ms=_env_int("BOOKING_STEP_TIMEOUT_MS", 10000),
+            wait_until=_env("BOOKING_WAIT_UNTIL", "domcontentloaded").lower(),
+            probe_timeout_ms=_env_int("BOOKING_PROBE_TIMEOUT_MS", 60000),
             out_dir=_env("BOOKING_OUT_DIR", "out/booking"),
             screenshot=_env("BOOKING_SCREENSHOT", "change").lower(),
             state_file=_env("BOOKING_STATE_FILE"),
@@ -95,6 +104,8 @@ class BookingConfig:
             problems.append("BOOKING_SCREENSHOT 은 always / change / never 중 하나여야 합니다.")
         if self.nav_timeout_ms <= 0 or self.step_timeout_ms <= 0:
             problems.append("타임아웃은 0보다 커야 합니다.")
+        if self.wait_until not in WAIT_UNTIL:
+            problems.append(f"BOOKING_WAIT_UNTIL 은 {' / '.join(WAIT_UNTIL)} 중 하나여야 합니다.")
         return problems
 
 
