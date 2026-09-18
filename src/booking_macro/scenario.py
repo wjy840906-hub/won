@@ -27,6 +27,7 @@ ACTIONS: dict[str, str] = {
     "accept_dialog": "다음에 뜨는 confirm/alert 을 확인 (값: true/false)",
     "screenshot": "화면 저장 (값: 파일 이름표)",
     "expect_text": "화면에 이 문구가 있어야 함 (값: 문구)",
+    "click_cell": "표에서 열·행이 만나는 칸을 클릭 (column / row / contains / exact)",
 }
 
 # 셀렉터를 주 인자로 받는 액션
@@ -36,7 +37,10 @@ VALUE_ACTIONS = {"goto", "wait_ms", "accept_dialog", "screenshot", "expect_text"
 # 값이 반드시 있어야 하는 액션
 VALUE_REQUIRED = {"goto", "fill", "select", "press", "wait_ms", "expect_text"}
 
-STEP_OPTIONS = {"action", "selector", "value", "timeout", "timeout_ms", "commit", "optional", "label"}
+STEP_OPTIONS = {
+    "action", "selector", "value", "timeout", "timeout_ms", "commit", "optional", "label",
+    "column", "row", "contains", "exact",
+}
 
 MATCH_KEYS = {"text_contains", "text_missing", "visible", "hidden"}
 
@@ -103,10 +107,18 @@ class Step:
     commit: bool = False
     optional: bool = False
     label: str = ""
+    # click_cell 전용 — 표에서 칸을 찾는 조건
+    column: str = ""
+    row: str = ""
+    contains: tuple[str, ...] = ()
+    exact: tuple[str, ...] = ()
 
     def describe(self) -> str:
         if self.label:
             return self.label
+        if self.action == "click_cell":
+            조건 = [부분 for 부분 in (self.column, self.row, *self.exact, *self.contains) if 부분]
+            return "click_cell " + " × ".join(조건)
         parts = [self.action]
         if self.selector:
             parts.append(self.selector)
@@ -150,6 +162,25 @@ class Step:
         if action == "accept_dialog" and value is None:
             value = primary if primary is not None else True
 
+        column = str(raw.get("column", "") or "")
+        if action == "click_cell":
+            # 짧은 표기 `- click_cell: 실외코트5` 는 column 으로 읽는다.
+            if primary is not None and primary is not True and primary != "" and not column:
+                column = str(primary)
+                value = None
+        row_text = str(raw.get("row", "") or "")
+        contains = _as_str_tuple(raw.get("contains"), f"{where}.contains")
+        exact = _as_str_tuple(raw.get("exact"), f"{where}.exact")
+        if action == "click_cell" and not (column or row_text or contains or exact):
+            raise ScenarioError(
+                f"{where}: click_cell 에는 column · row · contains · exact 중 하나는 있어야 합니다. "
+                "예: {click_cell: '실외코트5', row: '09:00~10:00'}"
+            )
+        if action != "click_cell" and (column or row_text or contains or exact):
+            raise ScenarioError(
+                f"{where}: column · row · contains · exact 는 click_cell 에서만 쓸 수 있습니다."
+            )
+
         value_text = "" if value is None else ("true" if value is True else "false" if value is False else str(value))
 
         if action in SELECTOR_ACTIONS and not selector:
@@ -182,6 +213,10 @@ class Step:
             commit=bool(raw.get("commit", False)),
             optional=bool(raw.get("optional", False)),
             label=str(raw.get("label", "") or ""),
+            column=column,
+            row=row_text,
+            contains=contains,
+            exact=exact,
         )
 
 

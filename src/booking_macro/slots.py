@@ -98,6 +98,9 @@ def _date_fields(value: date) -> dict[str, str]:
         "year": f"{value.year:04d}",
         "month": f"{value.month:02d}",
         "day": f"{value.day:02d}",
+        # 달력은 '05' 가 아니라 '5' 로 적는다.
+        "day_no": str(value.day),
+        "month_no": str(value.month),
         "weekday": WEEKDAYS_KO[value.weekday()],
     }
 

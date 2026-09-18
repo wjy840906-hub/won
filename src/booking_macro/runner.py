@@ -14,7 +14,14 @@ from .config import BookingConfig, now_kst, scenario_env
 from .scenario import Phase, Scenario
 from .scheduler import deadline_passed, resolve_open_at, retry_delay, wait_until
 from .slots import ResolvedTarget, resolve_targets
-from .steps import StepContext, StepError, evaluate_match, run_steps, take_screenshot
+from .steps import (
+    SlotUnavailable,
+    StepContext,
+    StepError,
+    evaluate_match,
+    run_steps,
+    take_screenshot,
+)
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +138,10 @@ def _attempt_target(
             page.goto(context.absolute(context.resolve(phase.url, "reserve.url")),
                       timeout=config.nav_timeout_ms)
         run_steps(page, phase.steps, context, "reserve")
+    except SlotUnavailable as exc:
+        # 코드가 잘못된 것이 아니라 그 자리가 안 되는 것이다. 다음 후보로 넘어간다.
+        shot = take_screenshot(page, context, f"{tag}-마감") if config.screenshot == "always" else None
+        return Attempt(round_no, target, Outcome.TAKEN, str(exc), context.performed, shot)
     except StepError as exc:
         shot = take_screenshot(page, context, f"{tag}-실패") if config.screenshot != "never" else None
         return Attempt(round_no, target, Outcome.FAILED, str(exc), context.performed, shot)

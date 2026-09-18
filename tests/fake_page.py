@@ -44,7 +44,8 @@ class FakePage:
         self.url = ""
         self.dialog_handlers: list[Callable[[FakeDialog], None]] = []
         self.screenshots: list[Path] = []
-        self.evaluate_result: dict = {}
+        self.evaluate_result: dict | list | Callable = {}
+        self.evaluate_args: list = []
 
     # -- 기록 도우미 -----------------------------------------------------
     def _record(self, action: str, selector: str = "", value: str = "") -> None:
@@ -97,9 +98,15 @@ class FakePage:
     def wait_for_load_state(self, state: str = "load", **_: object) -> None:
         self._record("load_state", state)
 
-    def evaluate(self, script: str, *_args: object) -> dict:
+    def evaluate(self, script: str, *args: object) -> dict:
         self._record("evaluate")
-        return self.evaluate_result
+        self.evaluate_args.append(args[0] if args else None)
+        result = self.evaluate_result
+        if callable(result):
+            return result(*args)
+        if isinstance(result, list):
+            return result.pop(0) if result else {}
+        return result
 
     def once(self, event: str, handler: Callable[[FakeDialog], None]) -> None:
         self._record("once", event)
