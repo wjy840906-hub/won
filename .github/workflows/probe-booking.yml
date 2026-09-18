@@ -1,0 +1,55 @@
+name: 예약 사이트 화면 진단
+
+# 시나리오를 쓰기 전에, 예약 사이트의 입력칸·버튼과 셀렉터를 뽑아 봅니다.
+# 로그인하지 않고 공개 화면만 열어 보며, 예약을 넣지 않습니다.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "열어 볼 주소 — 예) https://yeyak.dobongsiseol.or.kr"
+        required: true
+        default: "https://yeyak.dobongsiseol.or.kr"
+      clicks:
+        description: "예약 화면까지 눌러 갈 메뉴를 | 로 이어서 — 예) text=체육시설|text=테니스장"
+        required: false
+        default: ""
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          pip install -r requirements-booking.txt
+          python -m playwright install --with-deps chromium
+
+      - name: 화면 구조 뜯어보기
+        env:
+          PYTHONPATH: src
+          CLICKS: ${{ inputs.clicks }}
+        run: |
+          args=(--probe "${{ inputs.url }}")
+          # clicks 를 | 로 쪼개 --probe-click 여러 개로 넘긴다.
+          if [ -n "$CLICKS" ]; then
+            while IFS= read -r one; do
+              if [ -n "$one" ]; then args+=(--probe-click "$one"); fi
+            done <<< "${CLICKS//|/$'\n'}"
+          fi
+          python -m booking_macro "${args[@]}"
+
+      - name: HTML·화면 올리기
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: booking-probe
+          path: out/booking/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,8 @@
+# 예약 매크로(booking_macro) 전용 의존성.
+# 관리종목 리포트(requirements.txt)와 분리해 두어, 일일 리포트 워크플로가
+# 무거운 브라우저 패키지를 받지 않도록 합니다.
+#
+#   pip install -r requirements-booking.txt
+#   python -m playwright install chromium
+PyYAML>=6.0
+playwright>=1.44.0

@@ -1,0 +1,87 @@
+# 도봉구 시설예약 — 테니스 코트 (https://yeyak.dobongsiseol.or.kr) 초안
+#
+# ⚠ 셀렉터(#TODO...)는 아직 채워지지 않았습니다.
+#    이 저장소를 만든 환경에서는 해당 사이트에 접속할 수 없어(조직 네트워크 정책),
+#    실제 화면을 열어 확인하지 못했습니다. 지어내는 대신 비워 두었습니다.
+#
+# 채우는 방법 — 둘 중 하나로 화면 구조부터 뽑으세요:
+#
+#   (A) GitHub Actions 탭 → "예약 사이트 화면 진단" → Run workflow
+#       url    : https://yeyak.dobongsiseol.or.kr
+#       clicks : text=체육시설 | text=테니스장        ← 메뉴 이름에 맞게
+#
+#   (B) 내 PC 에서:
+#       PYTHONPATH=src python -m booking_macro \
+#         --probe https://yeyak.dobongsiseol.or.kr \
+#         --probe-click "text=체육시설" --probe-click "text=테니스장" --headed
+#
+# 그러면 입력칸·코트 목록·시간대 목록의 셀렉터가 그대로 찍힙니다.
+# 아래 #TODO 자리에 옮겨 적은 뒤, 반드시 --dry-run 으로 먼저 확인하세요.
+
+name: 도봉구 테니스장 예약
+base_url: https://yeyak.dobongsiseol.or.kr
+
+# 예약 오픈 시각 — 사이트 공지에서 확인해 맞추세요.
+# 공공시설은 보통 "이용일 N일 전 오전 9시" 식이라, 그 시각에 맞춰 두면 됩니다.
+# open_at: "09:00"
+
+# 오픈 직후에는 화면이 느려 한 번에 실패하는 일이 잦으니 몇 차례 더 돌립니다.
+attempts: 5
+interval_sec: 15
+jitter_sec: 3
+deadline_sec: 900
+
+login:
+  url: "/TODO-로그인주소"
+  steps:
+    - fill: "#TODO-아이디입력칸"
+      value: "{{ env.BOOKING_USER }}"
+      label: "아이디 입력칸 — 셀렉터를 아직 채우지 않았습니다(--probe 참고)"
+    - fill: "#TODO-비밀번호입력칸"
+      value: "{{ env.BOOKING_PASSWORD }}"
+      label: "비밀번호 입력칸 — 셀렉터를 아직 채우지 않았습니다"
+    - click: "#TODO-로그인버튼"
+      label: "로그인 버튼 — 셀렉터를 아직 채우지 않았습니다"
+  success_when:
+    # 로그인해야만 보이는 것으로 바꾸세요(예: 로그아웃 링크, 이름 표시).
+    text_missing: "로그인"
+
+# 잡고 싶은 날짜·시간·코트. 위에서부터 우선순위입니다.
+# date 는 '토'/'일'(다음에 오는 그 요일) · '+7d' · '2026-10-04' 모두 됩니다.
+# 시간대 표기는 진단 결과의 선택 상자 보기(예: '06:00~08:00')를 그대로 쓰세요.
+targets:
+  - date: "토"
+    time: ["TODO-시간대1", "TODO-시간대2"]
+    court: "TODO-코트1"
+  - date: "토"
+    time: ["TODO-시간대1", "TODO-시간대2"]
+    court: "TODO-코트2"
+  - date: "일"
+    time: ["TODO-시간대1", "TODO-시간대2"]
+    court: "TODO-코트1"
+
+reserve:
+  url: "/TODO-테니스장예약화면?rsvDate={{ target.date }}"
+  steps:
+    - wait_for: "#TODO-코트목록"
+      label: "코트 목록 — 셀렉터를 아직 채우지 않았습니다"
+    # 날짜를 주소가 아니라 화면에서 고르는 사이트라면 위 url 의 물음표 뒤를 지우고
+    # 아래처럼 직접 채웁니다. date_compact(20261004) · date_dot 도 쓸 수 있습니다.
+    # - fill: "#rsvDate"
+    #   value: "{{ target.date }}"
+    # - click: "#btnSearch"
+    - select: "#TODO-코트선택상자"
+      value: "{{ target.court }}"
+      label: "코트 선택 — 셀렉터를 아직 채우지 않았습니다"
+    - select: "#TODO-시간대선택상자"
+      value: "{{ target.time }}"
+      label: "시간대 선택 — 셀렉터를 아직 채우지 않았습니다"
+    - accept_dialog: true
+    - click: "#TODO-예약신청버튼"
+      commit: true               # --dry-run 이면 이 단계만 건너뜁니다
+      label: "예약신청 버튼 — 셀렉터를 아직 채우지 않았습니다"
+  success_when:
+    text_contains: "TODO-예약완료문구"    # 예: "예약이 접수되었습니다"
+  taken_when:
+    # 이 문구가 보이면 이 코트·시간은 포기하고 다음 후보로 넘어갑니다.
+    text_contains: ["TODO-마감문구"]      # 예: "이미 예약", "신청이 마감"
