@@ -189,6 +189,9 @@ python -m playwright install chromium
 cp .env.example .env      # BOOKING_USER / BOOKING_PASSWORD 를 채운 뒤
 set -a; source .env; set +a
 
+# 0) 사이트 화면을 열어 입력칸·버튼의 셀렉터를 뽑아 본다 (시나리오를 쓰기 전에)
+PYTHONPATH=src python -m booking_macro --probe https://예약사이트-주소
+
 # 1) 시나리오가 올바른지, 어떤 후보를 어떤 순서로 시도할지 먼저 확인
 PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --list-targets
 
@@ -202,10 +205,47 @@ PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --ema
 **처음 쓸 때는 반드시 `--dry-run` 으로 먼저 확인하세요.** `commit: true` 로 표시한
 확정 단계만 건너뛰고 나머지는 그대로 진행하므로, 셀렉터가 맞는지 안전하게 점검할 수 있습니다.
 
+## 셀렉터 찾기 — `--probe`
+
+시나리오에서 가장 손이 많이 가는 부분은 "이 버튼을 뭐라고 가리키지?" 입니다.
+`--probe` 로 주소를 하나 열어 보면, 화면의 **입력칸 · 선택 상자 · 버튼 · form · iframe** 을
+훑어서 **셀렉터 후보와 로그인 단계 초안**까지 뽑아 줍니다. 로그인하지 않고
+공개 화면만 열어 보며, 예약을 넣지 않습니다.
+
+```bash
+PYTHONPATH=src python -m booking_macro --probe https://예약사이트/login --headed
+```
+
+```
+============================== 입력칸 2개 ==============================
+  #mbrId                             text       아이디
+  #mbrPw                             password   비밀번호
+============================== 버튼·링크 1개 ==============================
+  #btnLogin                          '로그인'
+=============== 로그인 단계 초안 — 시나리오에 붙여 넣고 확인하세요 ===============
+  login:
+    url: /member/login.do
+    steps:
+      - fill: "#mbrId"
+        value: "{{ env.BOOKING_USER }}"
+      - fill: "#mbrPw"
+        value: "{{ env.BOOKING_PASSWORD }}"
+      - click: "#btnLogin"
+```
+
+HTML 원문과 전체 화면 그림도 `out/booking/` 에 남으므로, 나중에 천천히 볼 수 있습니다.
+파이썬을 깔지 않고도 **Actions 탭 → `예약 사이트 화면 진단` → Run workflow** 로
+같은 진단을 돌릴 수 있습니다(주소만 넣으면 됩니다).
+
+> **iframe 이 있다고 나오면** 예약 화면이 그 안에 들어 있다는 뜻입니다.
+> 지금 시나리오 문법은 iframe 안을 다루지 못하므로, 보고서에 찍힌 `src` 주소로
+> 직접 접속되는지 먼저 확인하고 그 주소를 `base_url`/`url` 로 쓰세요.
+
 ## 시나리오 쓰는 법
 
 `scenarios/example-meeting-room.yaml` 을 복사해서 고치는 것이 가장 빠릅니다.
-셀렉터는 브라우저에서 **F12 → 요소 선택 → Copy selector** 로 가져오면 됩니다.
+`--probe` 로 뽑은 셀렉터를 옮겨 적거나, 브라우저에서
+**F12 → 요소 선택 → Copy selector** 로 가져오면 됩니다.
 
 ```yaml
 name: 사내 회의실 예약
@@ -304,6 +344,7 @@ reserve:
 
 | 옵션 | 설명 |
 | --- | --- |
+| `--probe URL` | 그 주소의 입력칸·버튼과 셀렉터 후보를 출력(예약하지 않음) |
 | `--dry-run` | `commit` 단계를 누르지 않고 직전까지 진행 |
 | `--headed` | 브라우저 창을 띄워 눈으로 확인 |
 | `--now` | `open_at` 을 무시하고 즉시 시도 |
@@ -351,6 +392,7 @@ src/booking_macro/
   scheduler.py  오픈 시각 대기·재시도 간격
   steps.py      단계 실행과 성공/마감 판정
   runner.py     로그인 → 후보 순회 전체 흐름
+  probe.py      화면 구조 진단(--probe): 셀렉터 후보·시나리오 초안
   browser.py    Playwright 구동(여기서만 import)
   notify.py     결과 메일
   config.py     환경변수 설정
@@ -374,6 +416,7 @@ src/booking_macro/
 python -m pytest
 ```
 
-예약 매크로 쪽 90개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
+예약 매크로 쪽 109개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
 로그인 실패·마감 감지·후보 넘어가기·재시도·모의 실행을 검증하고, 시나리오 파싱 오류
-메시지와 자격증명이 로그·메일에 남지 않는지도 확인합니다.
+메시지와 자격증명이 로그·메일에 남지 않는지도 확인합니다. `--probe` 가 만든 로그인 초안이
+그대로 시나리오로 읽히는지도 검사합니다.

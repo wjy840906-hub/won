@@ -146,3 +146,22 @@ def test_필요한_환경변수가_비면_이름을_알려_준다(monkeypatch):
 
     with pytest.raises(ValueError, match="BOOKING_PASSWORD"):
         scenario_env(["BOOKING_PASSWORD"])
+
+
+def test_저장소에_들어_있는_시나리오는_모두_읽힌다():
+    폴더 = Path(__file__).resolve().parents[1] / "scenarios"
+    파일들 = sorted(폴더.glob("*.yaml"))
+
+    assert 파일들, "scenarios/ 에 예시가 하나는 있어야 합니다."
+    for path in 파일들:
+        load_scenario(path)
+
+
+def test_아직_채우지_않은_단계는_실패할_때_그렇게_알려_준다():
+    scenario = load_scenario(
+        Path(__file__).resolve().parents[1] / "scenarios" / "nowon-sports.yaml"
+    )
+
+    설명들 = [step.describe() for step in scenario.login.steps]
+
+    assert all("셀렉터를 아직 채우지 않았습니다" in 설명 for 설명 in 설명들)

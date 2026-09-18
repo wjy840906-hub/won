@@ -12,6 +12,7 @@ from kind_managed.config import MailConfig
 from .browser import BrowserError, open_page
 from .config import BookingConfig, now_kst, scenario_env
 from .notify import notify
+from .probe import probe_url
 from .runner import Outcome, run_scenario
 from .scenario import ACTIONS, ScenarioError, load_scenario
 from .scheduler import resolve_open_at
@@ -31,6 +32,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("scenario", nargs="?", help="시나리오 파일 경로(.yaml / .json)")
     parser.add_argument(
+        "--probe",
+        metavar="URL",
+        default=None,
+        help="주소를 열어 입력칸·버튼과 셀렉터 후보를 뽑아 봅니다(시나리오를 쓰기 전에).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="commit 으로 표시한 확정 단계를 누르지 않고 직전까지만 진행합니다.",
@@ -48,6 +55,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_probe(args: argparse.Namespace) -> int:
+    """--probe: 화면 구조만 뜯어보고 끝낸다(예약하지 않음)."""
+    try:
+        config = BookingConfig.from_env()
+    except ValueError as exc:
+        print(f"설정 오류: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
+    if args.headed:
+        config = replace(config, headless=False)
+    if args.out_dir is not None:
+        config = replace(config, out_dir=args.out_dir)
+
+    try:
+        with open_page(config) as page:
+            print(probe_url(page, args.probe, config))
+    except BrowserError as exc:
+        print(f"브라우저 오류: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 - 진단 도구이므로 이유만 보여 준다
+        print(f"진단 실패: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -56,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.probe:
+        return run_probe(args)
 
     if not args.scenario:
         print("시나리오 파일을 지정하세요. 예: python -m booking_macro scenarios/example-meeting-room.yaml",

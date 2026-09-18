@@ -1,0 +1,62 @@
+# 노원구 공공시설 예약 (https://reservation.nowonsc.kr) — 초안
+#
+# ⚠ 셀렉터(#TODO...)는 아직 채워지지 않았습니다.
+#    이 저장소를 만든 환경에서는 해당 사이트에 접속할 수 없어(조직 네트워크 정책),
+#    실제 화면을 열어 확인하지 못했습니다.
+#
+# 채우는 방법 — 둘 중 하나:
+#   (A) GitHub Actions 탭 → "예약 사이트 화면 진단" → Run workflow →
+#       url 에 로그인 주소를 넣고 실행하면, 입력칸·버튼의 셀렉터와
+#       로그인 단계 초안이 로그에 그대로 찍힙니다.
+#   (B) 내 PC 에서:
+#       PYTHONPATH=src python -m booking_macro --probe https://reservation.nowonsc.kr --headed
+#
+# 그 결과를 아래 #TODO 자리에 옮겨 적은 뒤, 반드시 --dry-run 으로 먼저 확인하세요.
+
+name: 노원구 시설 예약
+base_url: https://reservation.nowonsc.kr
+
+# 예약 오픈 시각에 맞춰 두세요(사이트 공지 확인).
+# open_at: "09:00"
+
+attempts: 3
+interval_sec: 10
+jitter_sec: 2
+deadline_sec: 600
+
+login:
+  url: "/TODO-로그인주소"          # 예: /member/login.do
+  steps:
+    - fill: "#TODO-아이디입력칸"
+      value: "{{ env.BOOKING_USER }}"
+      label: "아이디 입력칸 — 셀렉터를 아직 채우지 않았습니다(--probe 참고)"
+    - fill: "#TODO-비밀번호입력칸"
+      value: "{{ env.BOOKING_PASSWORD }}"
+      label: "비밀번호 입력칸 — 셀렉터를 아직 채우지 않았습니다"
+    - click: "#TODO-로그인버튼"
+      label: "로그인 버튼 — 셀렉터를 아직 채우지 않았습니다"
+  success_when:
+    # 로그인해야만 보이는 요소/문구로 바꾸세요(예: 로그아웃 링크, 이름 표시).
+    text_missing: "로그인"
+
+# 잡고 싶은 날짜·시간·시설. 위에서부터 우선순위입니다.
+targets:
+  - date: "+7d"
+    time: ["09:00", "10:00"]
+    facility: "TODO-시설명"
+
+reserve:
+  url: "/TODO-예약화면?date={{ target.date }}"
+  steps:
+    - wait_for: "#TODO-예약목록"
+      label: "예약 화면 목록 — 셀렉터를 아직 채우지 않았습니다"
+    - click: "text={{ target.facility }}"
+    - click: "text={{ target.time }}"
+    - accept_dialog: true
+    - click: "#TODO-예약확정버튼"
+      commit: true               # --dry-run 이면 이 단계만 건너뜁니다
+      label: "예약 확정 버튼 — 셀렉터를 아직 채우지 않았습니다"
+  success_when:
+    text_contains: "TODO-예약완료문구"    # 예: "예약이 완료되었습니다"
+  taken_when:
+    text_contains: ["TODO-마감문구"]      # 예: "이미 예약", "신청 마감"
