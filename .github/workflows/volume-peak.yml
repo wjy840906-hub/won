@@ -1,0 +1,91 @@
+name: 신고 거래량 종목 메일 발송
+
+on:
+  schedule:
+    # UTC 07:30 (KST 16:30) — 장 마감·정규 시세 확정 뒤에 돈다.
+    - cron: "30 7 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "기준일 (예: 2026-09-17). 비우면 최근 영업일"
+        required: false
+        default: ""
+      years:
+        description: "비교 기간(년)"
+        required: false
+        default: "10"
+      market:
+        description: "시장 (ALL/STK/KSQ/KNX)"
+        required: false
+        default: "ALL"
+      min_volume:
+        description: "기준일 거래량 하한(주)"
+        required: false
+        default: "100000"
+      send_email:
+        description: "메일 발송 여부"
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: volume-peak-daily
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 캐시 키용 날짜
+        id: cache_key
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # 과거 시세는 바뀌지 않으므로 캐시를 이어 쓴다(첫 실행만 10년치를 전부 받는다).
+      - name: 일별 시세 캐시
+        uses: actions/cache@v4
+        with:
+          path: .cache/krx_daily
+          key: krx-daily-${{ steps.cache_key.outputs.date }}
+          restore-keys: |
+            krx-daily-
+
+      - name: 신고 거래량 선별 → 엑셀 → 메일 발송
+        env:
+          PYTHONPATH: src
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          SMTP_USE_STARTTLS: ${{ vars.SMTP_USE_STARTTLS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ vars.MAIL_TO || 'wonjiyun@hanafn.com' }}
+          MAIL_CC: ${{ vars.MAIL_CC }}
+          TRADE_DATE: ${{ inputs.trade_date }}
+          VOLUME_YEARS: ${{ inputs.years || vars.VOLUME_YEARS || '10' }}
+          KRX_MARKET: ${{ inputs.market || vars.KRX_MARKET || 'ALL' }}
+          MIN_VOLUME: ${{ inputs.min_volume || vars.MIN_VOLUME || '100000' }}
+          MIN_VALUE: ${{ vars.MIN_VALUE || '1000000000' }}
+          KRX_WORKERS: ${{ vars.KRX_WORKERS || '8' }}
+        run: |
+          python -m volume_peak \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.send_email == false) && '--no-email' || '' }}
+
+      - name: 생성된 엑셀 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: volume-peak-xlsx
+          path: out/*.xlsx
