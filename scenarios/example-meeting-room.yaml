@@ -1,0 +1,66 @@
+# 사내 회의실 예약 예시.
+# 셀렉터(#userId, .btn-reserve …)는 실제 사이트 화면에 맞게 바꿔 주세요.
+# 개발자도구(F12) → 요소 선택 → Copy selector 로 가져오면 됩니다.
+
+name: 사내 회의실 예약
+base_url: https://booking.example.com
+
+# 예약 오픈 시각. 이 시각까지 기다렸다가 시도합니다.
+# 지우면 즉시 실행합니다. '2026-10-01 09:00' 처럼 날짜까지 적어도 됩니다.
+open_at: "09:00"
+
+# 실패(마감)했을 때 다시 시도할 횟수와 간격
+attempts: 3
+interval_sec: 10
+jitter_sec: 2
+deadline_sec: 600        # 이 시간을 넘기면 중단 (0 = 제한 없음)
+
+login:
+  url: /login
+  steps:
+    - fill: "#userId"
+      value: "{{ env.BOOKING_USER }}"
+    - fill: "#userPw"
+      value: "{{ env.BOOKING_PASSWORD }}"
+    - click: "button[type=submit]"
+    - wait_for: ".gnb-user"
+  success_when:
+    visible: ".gnb-user"          # 로그인해야 보이는 요소
+    text_missing: "아이디 또는 비밀번호"
+
+# 예약하고 싶은 후보. 위에서부터 차례로 시도합니다.
+# 값에 목록을 쓰면 조합으로 펼쳐집니다(적은 순서가 우선순위).
+# date 는 2026-10-01 / +7d / +1w / 내일 / 월요일 처럼 쓸 수 있습니다.
+targets:
+  - date: "+7d"
+    time: ["10:00", "14:00"]
+    room: "대회의실"
+  - date: "+7d"
+    time: ["10:00", "14:00"]
+    room: "소회의실 A"
+
+reserve:
+  # {{ target.* }} 로 후보 값을 끼워 넣습니다.
+  # date 는 date / date_compact(20261001) / date_dot / year / month / day / weekday 로도 쓸 수 있습니다.
+  url: /rooms?date={{ target.date }}
+  steps:
+    - wait_for: ".room-list"
+    - click: "text={{ target.room }}"
+    - select: "#timeSlot"
+      value: "{{ target.time }}"
+    - fill: "#purpose"
+      value: "팀 정기회의"
+      optional: true            # 없는 화면이어도 넘어감
+    - accept_dialog: true       # 다음 confirm 창을 확인 누름
+    - click: "#btnReserve"
+      commit: true              # --dry-run 이면 이 단계만 건너뜁니다
+    - wait_for: ".result-message"
+      optional: true
+
+  # 화면에 이게 보이면 예약 성공
+  success_when:
+    text_contains: "예약이 완료"
+
+  # 이게 보이면 이 후보는 포기하고 다음 후보로
+  taken_when:
+    text_contains: ["이미 예약된", "선택하신 시간은 마감"]

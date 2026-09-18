@@ -1,5 +1,8 @@
 # 관리종목 일일 리포트 자동화
 
+> 이 저장소에는 두 가지 자동화가 들어 있습니다.
+> **① 관리종목 일일 리포트**(아래) · **② [예약 매크로](#예약-매크로)** — 예약 사이트를 대신 눌러 주는 도구.
+
 한국거래소 상장공시시스템 **KIND**(kind.krx.co.kr)에서 **관리종목**(종목명 · 지정사유 · 지정일)을
 매일 수집하고, 각 종목의 **사업자등록번호**를 붙여 **엑셀(.xlsx)** 로 만든 뒤
 **wonjiyun@hanafn.com** 으로 메일 발송합니다.
@@ -164,3 +167,213 @@ src/kind_managed/
 
 - 관리종목 지정/해제는 거래소 공시 시점에 반영되므로, 발송 시각을 장 시작 전으로 두면
   전 영업일까지의 지정 내역이 담깁니다.
+
+---
+
+# 예약 매크로
+
+회의실·체육시설처럼 **본인 계정으로 쓰는 예약 사이트**를, 정해진 시각에 브라우저를 띄워
+대신 눌러 줍니다. 사이트마다 다른 부분(주소·버튼·입력칸)은 **시나리오 파일(YAML)** 에만
+적으므로, 새 사이트를 붙일 때 파이썬 코드를 고칠 필요가 없습니다.
+
+```
+오픈 시각까지 대기 ──▶ 로그인 ──▶ 1순위 후보 시도 ──▶ 마감이면 2순위 … ──▶ 결과 메일
+```
+
+## 빠르게 해 보기
+
+```bash
+pip install -r requirements-booking.txt
+python -m playwright install chromium
+
+cp .env.example .env      # BOOKING_USER / BOOKING_PASSWORD 를 채운 뒤
+set -a; source .env; set +a
+
+# 1) 시나리오가 올바른지, 어떤 후보를 어떤 순서로 시도할지 먼저 확인
+PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --list-targets
+
+# 2) 창을 띄워 놓고, 확정 버튼은 누르지 않은 채 끝까지 흘려 보기
+PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --dry-run --headed --now
+
+# 3) 실제 예약 (open_at 시각까지 기다렸다가 시도)
+PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --email
+```
+
+**처음 쓸 때는 반드시 `--dry-run` 으로 먼저 확인하세요.** `commit: true` 로 표시한
+확정 단계만 건너뛰고 나머지는 그대로 진행하므로, 셀렉터가 맞는지 안전하게 점검할 수 있습니다.
+
+## 시나리오 쓰는 법
+
+`scenarios/example-meeting-room.yaml` 을 복사해서 고치는 것이 가장 빠릅니다.
+셀렉터는 브라우저에서 **F12 → 요소 선택 → Copy selector** 로 가져오면 됩니다.
+
+```yaml
+name: 사내 회의실 예약
+base_url: https://booking.example.com
+open_at: "09:00"          # 이 시각까지 기다렸다 시도 (지우면 즉시)
+attempts: 3               # 전부 마감이면 몇 번 더 돌지
+interval_sec: 10          # 회차 사이 간격
+deadline_sec: 600         # 이 시간을 넘기면 중단 (0 = 제한 없음)
+
+login:
+  url: /login
+  steps:
+    - fill: "#userId"
+      value: "{{ env.BOOKING_USER }}"
+    - fill: "#userPw"
+      value: "{{ env.BOOKING_PASSWORD }}"
+    - click: "button[type=submit]"
+  success_when:
+    visible: ".gnb-user"           # 로그인해야 보이는 요소
+
+targets:                           # 위에서부터 우선순위
+  - date: "+7d"
+    time: ["10:00", "14:00"]       # 목록을 쓰면 조합으로 펼쳐집니다
+    room: "대회의실"
+
+reserve:
+  url: /rooms?date={{ target.date }}
+  steps:
+    - click: "text={{ target.room }}"
+    - select: "#timeSlot"
+      value: "{{ target.time }}"
+    - accept_dialog: true          # 뒤이어 뜰 confirm 창을 확인 누름
+    - click: "#btnReserve"
+      commit: true                 # --dry-run 이면 이 단계만 건너뜁니다
+  success_when:
+    text_contains: "예약이 완료"
+  taken_when:
+    text_contains: ["이미 예약된", "마감"]
+```
+
+### 단계(steps) 목록
+
+| 액션 | 뜻 | 예 |
+| --- | --- | --- |
+| `goto` | 주소로 이동 | `- goto: /rooms` |
+| `fill` | 입력란 채우기 | `- fill: "#id"` + `value: "..."` |
+| `click` | 클릭 | `- click: "#btn"` |
+| `select` | 드롭다운 선택 | `- select: "#slot"` + `value: "10:00"` |
+| `check` / `uncheck` | 체크박스 | `- check: "#agree"` |
+| `press` | 키 입력 | `- press: "#q"` + `value: Enter` |
+| `wait_for` | 요소가 나올 때까지 대기 | `- wait_for: ".list"` |
+| `wait_ms` | 고정 시간 대기 | `- wait_ms: 500` |
+| `accept_dialog` | 다음 confirm/alert 확인 | `- accept_dialog: true` |
+| `screenshot` | 화면 저장 | `- screenshot: 목록화면` |
+| `expect_text` | 이 문구가 있어야 함 | `- expect_text: "예약 가능"` |
+
+각 단계에 붙일 수 있는 옵션:
+
+- `commit: true` — 되돌릴 수 없는 확정 단계. `--dry-run` 일 때만 건너뜁니다.
+- `optional: true` — 실패해도 넘어갑니다(화면마다 있거나 없는 입력칸 등).
+- `timeout: 30000` — 이 단계만 다른 대기 시간(밀리초).
+
+### 후보(targets) 에서 쓸 수 있는 값
+
+`date` 는 `2026-10-01` · `20261001` · `+7d` · `+1w` · `내일` · `월요일` 처럼 적을 수 있고,
+시나리오 안에서는 사이트 표기에 맞춰 골라 씁니다.
+
+| 자리표시자 | 값 |
+| --- | --- |
+| `{{ target.date }}` | `2026-10-01` |
+| `{{ target.date_compact }}` | `20261001` |
+| `{{ target.date_dot }}` | `2026.10.01` |
+| `{{ target.year }}` / `.month` / `.day` | `2026` / `10` / `01` |
+| `{{ target.weekday }}` | `목` |
+| `{{ target.<직접 적은 이름> }}` | `time`, `room` 등 targets 에 적은 값 그대로 |
+
+`{{ env.BOOKING_* }}` 로 환경변수를 참조합니다. **아이디·비밀번호는 시나리오 파일이 아니라
+환경변수에 두세요** — 시나리오가 읽을 수 있는 이름은 `BOOKING_` / `RESERVE_` 로
+시작하는 것뿐이라, 다른 비밀값이 새어 나가지 않습니다.
+
+### 성공·마감 판정
+
+| 항목 | 쓰임 |
+| --- | --- |
+| `success_when` | 이게 맞으면 **예약 성공**, 거기서 멈춥니다 |
+| `taken_when` | 이게 맞으면 이 후보는 포기하고 **다음 후보**로 |
+
+둘 다 `text_contains`(화면에 있는 문구) · `text_missing` · `visible`(셀렉터) ·
+`hidden` 을 쓸 수 있고, 적은 것이 **모두** 맞아야 참입니다.
+
+`success_when` 을 생략하면 **단계를 끝까지 마친 것**을 성공으로 봅니다. 성공 화면에
+고정된 문구가 없을 때만 그렇게 두고, 가능하면 적어 주세요 — 적어 두어야 "눌렀지만
+예약되지 않은" 경우를 잡아냅니다.
+
+## 주요 옵션
+
+| 옵션 | 설명 |
+| --- | --- |
+| `--dry-run` | `commit` 단계를 누르지 않고 직전까지 진행 |
+| `--headed` | 브라우저 창을 띄워 눈으로 확인 |
+| `--now` | `open_at` 을 무시하고 즉시 시도 |
+| `--list-targets` | 펼쳐진 후보를 순서대로 출력(브라우저 없음) |
+| `--check` | 시나리오만 검사(브라우저 없음) |
+| `--attempts N` / `--interval S` | 재시도 횟수·간격을 시나리오보다 우선 적용 |
+| `--email` / `--mail-to a@b.com` | 결과를 메일로 발송 |
+| `--out-dir` | 화면 저장 폴더 (기본 `out/booking`) |
+| `-v` | 상세 로그 |
+
+종료 코드: `0` 예약(또는 모의) 성공 / `1` 후보를 못 잡음 / `2` 설정·시나리오 오류 / `3` 실행 중단
+
+## 환경변수
+
+| 이름 | 기본값 | 설명 |
+| --- | --- | --- |
+| `BOOKING_USER` · `BOOKING_PASSWORD` | (없음) | 시나리오에서 `{{ env.* }}` 로 참조 |
+| `BOOKING_HEADLESS` | `true` | `false` 면 창을 띄움 |
+| `BOOKING_BROWSER` | `chromium` | `firefox` · `webkit` 도 가능 |
+| `BOOKING_DRY_RUN` | `false` | `--dry-run` 의 기본값 |
+| `BOOKING_SCREENSHOT` | `change` | `always` · `change` · `never` |
+| `BOOKING_STATE_FILE` | (없음) | 로그인 쿠키 저장 경로. 두면 다음 실행에서 로그인 생략 |
+| `BOOKING_NAV_TIMEOUT_MS` / `BOOKING_STEP_TIMEOUT_MS` | `20000` / `10000` | 대기 시간 |
+| `PLAYWRIGHT_EXECUTABLE_PATH` | (없음) | 브라우저 실행 파일을 직접 지정할 때 |
+
+메일 발송은 관리종목 리포트와 **같은 SMTP 설정**(`SMTP_HOST`, `MAIL_TO` …)을 씁니다.
+
+## 정해진 시각에 자동 실행
+
+`.github/workflows/reserve.yml` 이 Actions 탭에서 **수동 실행**(`Run workflow`)되도록 되어 있고,
+시나리오 경로와 `--dry-run` 여부를 고를 수 있습니다. 매일 돌리려면 파일 안의 `schedule`
+주석을 풀고 cron(UTC)을 맞추세요. Secrets 에 `BOOKING_USER` · `BOOKING_PASSWORD` 가 필요합니다.
+
+> 사내망 안에서만 열리는 사이트라면 GitHub Actions 에서 접속할 수 없습니다.
+> 그럴 때는 사내 PC/서버의 `cron`(또는 작업 스케줄러)에서 같은 명령을 돌리세요.
+> 예: `55 8 * * 1-5 cd /srv/won && PYTHONPATH=src /usr/bin/python3 -m booking_macro scenarios/회의실.yaml >> log 2>&1`
+
+## 구조
+
+```
+src/booking_macro/
+  scenario.py   시나리오(YAML/JSON) 파싱·검증
+  template.py   {{ env.* }} · {{ target.* }} 치환
+  slots.py      날짜 표기 해석과 후보 펼치기
+  scheduler.py  오픈 시각 대기·재시도 간격
+  steps.py      단계 실행과 성공/마감 판정
+  runner.py     로그인 → 후보 순회 전체 흐름
+  browser.py    Playwright 구동(여기서만 import)
+  notify.py     결과 메일
+  config.py     환경변수 설정
+  __main__.py   CLI
+```
+
+## 쓰기 전에 알아 둘 것
+
+- **본인 계정으로 정당하게 쓰는 예약에만** 쓰세요. 사이트 이용약관이 자동화를 금지하는 경우가
+  있고, 공연 입장권은 매크로 사용 자체가 **공연법으로 금지**되어 있습니다.
+- 재시도 간격은 최소 1초로 제한됩니다(`scheduler.MIN_INTERVAL_SEC`). 간격을 지나치게 좁히면
+  서버에 부담을 주고 계정이 차단될 수 있으니, 기본값(10초 안팎)을 권합니다.
+- 캡차·휴대폰 인증·공동인증서가 있는 사이트는 자동화할 수 없습니다.
+  `--headed` 로 창을 띄워 그 단계만 직접 처리하거나, `BOOKING_STATE_FILE` 로 로그인 세션을
+  저장해 두는 방법이 있습니다.
+- 사이트 화면이 바뀌면 셀렉터가 깨집니다. 실패 시 `out/booking/` 에 남는 화면을 보고 고치세요.
+
+## 테스트
+
+```bash
+python -m pytest
+```
+
+예약 매크로 쪽 90개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
+로그인 실패·마감 감지·후보 넘어가기·재시도·모의 실행을 검증하고, 시나리오 파싱 오류
+메시지와 자격증명이 로그·메일에 남지 않는지도 확인합니다.
