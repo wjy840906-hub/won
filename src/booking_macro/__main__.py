@@ -38,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="주소를 열어 입력칸·버튼과 셀렉터 후보를 뽑아 봅니다(시나리오를 쓰기 전에).",
     )
     parser.add_argument(
+        "--probe-click",
+        metavar="셀렉터",
+        action="append",
+        default=None,
+        help="--probe 와 함께: 예약 화면까지 눌러 가야 할 때 순서대로 적습니다"
+        " (예: --probe-click 'text=체육시설' --probe-click 'text=테니스장'). 여러 번 쓸 수 있습니다.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="commit 으로 표시한 확정 단계를 누르지 않고 직전까지만 진행합니다.",
@@ -69,7 +77,7 @@ def run_probe(args: argparse.Namespace) -> int:
 
     try:
         with open_page(config) as page:
-            print(probe_url(page, args.probe, config))
+            print(probe_url(page, args.probe, config, tuple(args.probe_click or ())))
     except BrowserError as exc:
         print(f"브라우저 오류: {exc}", file=sys.stderr)
         return EXIT_ERROR

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from booking_macro.probe import draft_login_steps, format_report, suggest_selector
 
 
@@ -151,3 +153,75 @@ def test_숨겨진_입력칸은_보고서에_넣지_않는다():
 
     assert "입력칸 2개" in 보고서
     assert "#csrf" not in 보고서
+
+
+# -- 예약 화면까지 눌러 들어가기(--probe-click) --------------------------------
+
+
+@pytest.fixture
+def 진단페이지(tmp_path):
+    from fake_page import FakePage
+
+    from booking_macro.config import BookingConfig
+
+    page = FakePage()
+    page.evaluate_result = 로그인화면
+    return page, BookingConfig(out_dir=str(tmp_path / "probe"))
+
+
+def test_클릭_없이_열린_화면을_뜯어본다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+
+    보고서 = probe_url(page, "https://yeyak.example.or.kr", config)
+
+    assert page.clicked == []
+    assert "#mbrId" in 보고서
+    assert "따라간 경로" not in 보고서
+
+
+def test_적어_준_순서대로_눌러_들어간다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+    page.on_click = {
+        "text=체육시설": lambda p: setattr(p, "url", "/sports"),
+        "text=테니스장": lambda p: setattr(p, "url", "/sports/tennis"),
+    }
+
+    보고서 = probe_url(
+        page, "https://yeyak.example.or.kr", config, ("text=체육시설", "text=테니스장")
+    )
+
+    assert page.clicked == ["text=체육시설", "text=테니스장"]
+    assert "따라간 경로" in 보고서
+    assert "1. text=체육시설 → /sports" in 보고서
+    assert "2. text=테니스장 → /sports/tennis" in 보고서
+
+
+def test_중간에_못_누르면_거기까지_보여_주고_계속_진단한다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+    page.fail_on = {"text=없는메뉴": "그런 메뉴 없음"}
+
+    보고서 = probe_url(
+        page, "https://yeyak.example.or.kr", config, ("text=없는메뉴", "text=테니스장")
+    )
+
+    assert "text=없는메뉴 → 누르지 못함" in 보고서
+    assert "text=테니스장" not in 보고서  # 끊긴 뒤로는 시도하지 않는다
+    assert "#mbrId" in 보고서            # 그래도 현재 화면은 뜯어본다
+
+
+def test_진단_결과를_파일로_남긴다(진단페이지):
+    from booking_macro.probe import probe_url
+
+    page, config = 진단페이지
+
+    보고서 = probe_url(page, "https://yeyak.example.or.kr", config, ("text=체육시설",))
+
+    저장된 = sorted(path.name for path in Path(config.out_dir).iterdir())
+    assert 저장된 == ["probe-yeyak_example_or_kr-1단계.html", "probe-yeyak_example_or_kr-1단계.png"]
+    assert "HTML 저장" in 보고서

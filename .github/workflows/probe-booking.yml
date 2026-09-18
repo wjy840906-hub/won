@@ -6,9 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: "열어 볼 주소 — 예) https://reservation.nowonsc.kr"
+        description: "열어 볼 주소 — 예) https://yeyak.dobongsiseol.or.kr"
         required: true
-        default: "https://reservation.nowonsc.kr"
+        default: "https://yeyak.dobongsiseol.or.kr"
+      clicks:
+        description: "예약 화면까지 눌러 갈 메뉴를 | 로 이어서 — 예) text=체육시설|text=테니스장"
+        required: false
+        default: ""
 
 jobs:
   probe:
@@ -30,7 +34,16 @@ jobs:
       - name: 화면 구조 뜯어보기
         env:
           PYTHONPATH: src
-        run: python -m booking_macro --probe "${{ inputs.url }}"
+          CLICKS: ${{ inputs.clicks }}
+        run: |
+          args=(--probe "${{ inputs.url }}")
+          # clicks 를 | 로 쪼개 --probe-click 여러 개로 넘긴다.
+          if [ -n "$CLICKS" ]; then
+            while IFS= read -r one; do
+              if [ -n "$one" ]; then args+=(--probe-click "$one"); fi
+            done <<< "${CLICKS//|/$'\n'}"
+          fi
+          python -m booking_macro "${args[@]}"
 
       - name: HTML·화면 올리기
         if: always()

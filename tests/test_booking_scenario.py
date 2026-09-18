@@ -159,7 +159,7 @@ def test_저장소에_들어_있는_시나리오는_모두_읽힌다():
 
 def test_아직_채우지_않은_단계는_실패할_때_그렇게_알려_준다():
     scenario = load_scenario(
-        Path(__file__).resolve().parents[1] / "scenarios" / "nowon-sports.yaml"
+        Path(__file__).resolve().parents[1] / "scenarios" / "dobong-tennis.yaml"
     )
 
     설명들 = [step.describe() for step in scenario.login.steps]

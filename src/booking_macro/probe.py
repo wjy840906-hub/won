@@ -156,6 +156,13 @@ def draft_login_steps(data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _current_url(page: Any) -> str:
+    try:
+        return str(page.url)
+    except Exception:  # noqa: BLE001
+        return "(주소를 읽지 못함)"
+
+
 def _section(title: str) -> str:
     return f"\n{'=' * 78}\n{title}\n{'=' * 78}"
 
@@ -219,20 +226,50 @@ def format_report(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def probe_url(page: Any, url: str, config: BookingConfig) -> str:
-    """URL 을 열어 화면 구조를 뜯어보고, HTML·화면을 파일로 남긴다."""
-    page.goto(url, timeout=config.nav_timeout_ms)
+def _settle(page: Any, config: BookingConfig) -> None:
+    """화면이 자리잡을 때까지 잠깐 기다린다(끝나지 않아도 넘어간다)."""
     try:
         page.wait_for_load_state("networkidle", timeout=config.step_timeout_ms)
     except Exception:  # noqa: BLE001 - 계속 통신하는 화면이면 그냥 넘어간다
         log.debug("networkidle 대기를 건너뜁니다.")
 
+
+def probe_url(
+    page: Any,
+    url: str,
+    config: BookingConfig,
+    clicks: tuple[str, ...] = (),
+) -> str:
+    """URL 을 열어 화면 구조를 뜯어보고, HTML·화면을 파일로 남긴다.
+
+    예약 화면이 메뉴 몇 단계 안에 있으면 `clicks` 로 그 경로를 따라간 뒤
+    도착한 화면을 뜯어본다(--probe-click). 누르는 것은 이동·조회 뿐이라고
+    보고, 예약을 확정하는 버튼은 넣지 말아야 한다.
+    """
+    page.goto(url, timeout=config.nav_timeout_ms)
+    _settle(page, config)
+
+    걸어온_길: list[str] = []
+    for selector in clicks:
+        try:
+            page.click(selector, timeout=config.step_timeout_ms)
+        except Exception as exc:  # noqa: BLE001 - 어디서 끊겼는지 보여 주고 계속 진단
+            걸어온_길.append(f"{selector} → 누르지 못함 ({type(exc).__name__})")
+            break
+        _settle(page, config)
+        걸어온_길.append(f"{selector} → {_current_url(page)}")
+
     data = page.evaluate(EXTRACT_JS)
     report = format_report(data)
+    if 걸어온_길:
+        길 = "\n".join(f"  {index}. {걸음}" for index, 걸음 in enumerate(걸어온_길, start=1))
+        report = _section("따라간 경로") + "\n" + 길 + report
 
     directory = Path(config.out_dir)
     directory.mkdir(parents=True, exist_ok=True)
     stem = "probe-" + re.sub(r"[^A-Za-z0-9]+", "_", urlparse(url).netloc or "page")
+    if clicks:
+        stem += f"-{len(clicks)}단계"
     html_path = directory / f"{stem}.html"
     try:
         html_path.write_text(page.content(), encoding="utf-8")

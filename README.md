@@ -216,6 +216,28 @@ PYTHONPATH=src python -m booking_macro scenarios/example-meeting-room.yaml --ema
 PYTHONPATH=src python -m booking_macro --probe https://예약사이트/login --headed
 ```
 
+예약 화면이 메뉴 몇 단계 안에 있으면(공공시설 사이트가 대개 그렇습니다)
+`--probe-click` 으로 눌러 갈 경로를 적어 주면 됩니다. 순서대로 누른 뒤
+**도착한 화면**을 뜯어봅니다.
+
+```bash
+PYTHONPATH=src python -m booking_macro \
+  --probe https://예약사이트 \
+  --probe-click "text=체육시설" --probe-click "text=테니스장"
+```
+
+```
+============================== 따라간 경로 ==============================
+  1. text=체육시설 → https://예약사이트/sports.html
+  2. text=테니스장 → https://예약사이트/tennis.html
+============================== 선택 상자 2개 ==============================
+  #courtNo                           1번 코트 / 2번 코트 / 3번 코트
+  #timeSlot                          06:00~08:00 / 08:00~10:00 / 10:00~12:00
+```
+
+여기서 나온 코트·시간대 보기를 그대로 시나리오의 `targets` 에 옮겨 적으면 됩니다.
+중간에 못 누르면 거기까지 알려 주고, 그 화면이라도 뜯어봅니다.
+
 ```
 ============================== 입력칸 2개 ==============================
   #mbrId                             text       아이디
@@ -244,6 +266,8 @@ HTML 원문과 전체 화면 그림도 `out/booking/` 에 남으므로, 나중�
 ## 시나리오 쓰는 법
 
 `scenarios/example-meeting-room.yaml` 을 복사해서 고치는 것이 가장 빠릅니다.
+(`scenarios/dobong-tennis.yaml` 은 도봉구 테니스장용 초안으로, 셀렉터 자리가
+`#TODO` 로 비워져 있습니다 — `--probe` 결과를 옮겨 적어 쓰세요.)
 `--probe` 로 뽑은 셀렉터를 옮겨 적거나, 브라우저에서
 **F12 → 요소 선택 → Copy selector** 로 가져오면 됩니다.
 
@@ -345,6 +369,7 @@ reserve:
 | 옵션 | 설명 |
 | --- | --- |
 | `--probe URL` | 그 주소의 입력칸·버튼과 셀렉터 후보를 출력(예약하지 않음) |
+| `--probe-click 셀렉터` | `--probe` 와 함께: 예약 화면까지 눌러 갈 경로(여러 번 지정 가능) |
 | `--dry-run` | `commit` 단계를 누르지 않고 직전까지 진행 |
 | `--headed` | 브라우저 창을 띄워 눈으로 확인 |
 | `--now` | `open_at` 을 무시하고 즉시 시도 |
@@ -416,7 +441,7 @@ src/booking_macro/
 python -m pytest
 ```
 
-예약 매크로 쪽 109개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
+예약 매크로 쪽 113개 테스트는 **브라우저 없이** 돕니다. 가짜 페이지(`tests/fake_page.py`)로
 로그인 실패·마감 감지·후보 넘어가기·재시도·모의 실행을 검증하고, 시나리오 파싱 오류
 메시지와 자격증명이 로그·메일에 남지 않는지도 확인합니다. `--probe` 가 만든 로그인 초안이
 그대로 시나리오로 읽히는지도 검사합니다.
