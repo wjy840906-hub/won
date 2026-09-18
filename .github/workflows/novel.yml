@@ -1,0 +1,92 @@
+name: 소설 원고 생성
+
+on:
+  workflow_dispatch:
+    inputs:
+      idea:
+        description: "무엇을 쓸지 한두 문장으로"
+        required: true
+      chapters:
+        description: "장 수"
+        required: false
+        default: "10"
+      chars:
+        description: "장당 목표 글자수"
+        required: false
+        default: "3000"
+      genre:
+        description: "장르 (예: 미스터리)"
+        required: false
+        default: ""
+      tone:
+        description: "분위기·문체 (예: 담백하고 건조한 문체)"
+        required: false
+        default: ""
+      notes:
+        description: "그 밖의 요구 (예: 결말은 열린 결말로)"
+        required: false
+        default: ""
+      send_email:
+        description: "원고를 메일로도 보낼지"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: novel-${{ github.actor }}
+  cancel-in-progress: false
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 기획 → 집필 → 원고 저장
+        env:
+          PYTHONPATH: src
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOVEL_MODEL: ${{ vars.NOVEL_MODEL }}
+          NOVEL_EFFORT: ${{ vars.NOVEL_EFFORT }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_SSL: ${{ vars.SMTP_USE_SSL }}
+          SMTP_USE_STARTTLS: ${{ vars.SMTP_USE_STARTTLS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ vars.MAIL_TO || 'wonjiyun@hanafn.com' }}
+          # 입력값은 셸에 직접 넣지 않고 환경변수로 넘긴다(따옴표·줄바꿈 안전).
+          IDEA: ${{ inputs.idea }}
+          CHAPTERS: ${{ inputs.chapters }}
+          CHARS: ${{ inputs.chars }}
+          GENRE: ${{ inputs.genre }}
+          TONE: ${{ inputs.tone }}
+          NOTES: ${{ inputs.notes }}
+          SEND_EMAIL: ${{ inputs.send_email }}
+        run: |
+          args=( "$IDEA" --chapters "$CHAPTERS" --chars "$CHARS" )
+          if [ -n "$GENRE" ]; then args+=( --genre "$GENRE" ); fi
+          if [ -n "$TONE" ]; then args+=( --tone "$TONE" ); fi
+          if [ -n "$NOTES" ]; then args+=( --notes "$NOTES" ); fi
+          if [ "$SEND_EMAIL" = "true" ]; then args+=( --email ); fi
+          python -m novel_writer "${args[@]}"
+
+      - name: 원고 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: novel-manuscript
+          path: out/novel/**
+          if-no-files-found: warn
+          retention-days: 30
