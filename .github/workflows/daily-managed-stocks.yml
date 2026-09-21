@@ -50,6 +50,10 @@ jobs:
         with:
           path: .cache
           key: dart-corpcode-${{ steps.cache_key.outputs.date }}
+          # 날짜 키는 매일 빗나가므로, 지난 캐시라도 복원해 둔다.
+          # DART 가 죽은 날 이 캐시가 사업자등록번호를 살린다.
+          restore-keys: |
+            dart-corpcode-
 
       - name: 관리종목 수집 → 엑셀 → 메일 발송
         env:

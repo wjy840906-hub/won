@@ -47,6 +47,7 @@ def write_excel(
     out_path: str | Path,
     as_of: str,
     period: str = "",
+    warning: str = "",
     source_note: str = "출처: 한국거래소 KIND(kind.krx.co.kr) / 사업자등록번호: 금융감독원 DART",
 ) -> ExcelResult:
     """관리종목 목록을 서식이 적용된 엑셀 파일로 저장한다."""
@@ -63,6 +64,11 @@ def write_excel(
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLUMNS))
     sheet.cell(row=2, column=1, value=source_note).font = Font(size=9, color="808080")
     sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(COLUMNS))
+
+    if warning:
+        cell = sheet.cell(row=3, column=1, value=warning)
+        cell.font = Font(size=9, bold=True, color="C00000")
+        sheet.merge_cells(start_row=3, start_column=1, end_row=3, end_column=len(COLUMNS))
 
     header_row = 4
     for index, (header, _field, width, _align) in enumerate(COLUMNS, start=1):

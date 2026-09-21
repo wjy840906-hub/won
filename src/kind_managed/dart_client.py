@@ -13,7 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -24,7 +24,16 @@ CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 COMPANY_URL = "https://opendart.fss.or.kr/api/company.json"
 
 # corpCode.xml 은 수십 MB 라 내려받는 데 몇 분이 걸릴 수 있다.
-CORP_CODE_TIMEOUT = 600
+# 다만 연결(connect)까지 길게 기다리면 서버가 죽었을 때 하염없이 매달리므로 분리한다.
+CORP_CODE_CONNECT_TIMEOUT = 15
+CORP_CODE_READ_TIMEOUT = 600
+
+# 일시적인 DART 장애에 대비한 재시도
+CORP_CODE_ATTEMPTS = 3
+CORP_CODE_BACKOFF = 5.0
+
+# 내려받아 둔 corpCode 캐시를 며칠까지 보관할지
+CORP_CODE_CACHE_DAYS = 30
 
 # DART 응답 status 코드 중 재시도가 무의미한 것들
 _FATAL_STATUS = {
@@ -145,19 +154,35 @@ class DartClient:
     def _corp_code_cache_path(self) -> Path:
         return self.cache_dir / f"corpcode-{date.today().isoformat()}.xml"
 
-    def _download_corp_code(self) -> bytes:
-        try:
-            # 20MB 규모라 일반 요청보다 넉넉한 타임아웃을 준다.
-            response = self.session.get(
-                CORP_CODE_URL,
-                params={"crtfc_key": self.api_key},
-                timeout=max(self.timeout, CORP_CODE_TIMEOUT),
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise DartError(f"corpCode.xml 다운로드 실패: {exc}") from exc
+    def _request_corp_code(self) -> bytes:
+        """corpCode.xml 을 내려받는다. 일시적 장애는 몇 차례 재시도한다."""
+        last_error: Exception | None = None
+        for attempt in range(1, CORP_CODE_ATTEMPTS + 1):
+            try:
+                # 20MB 규모라 읽기는 길게, 연결은 짧게 잡는다.
+                response = self.session.get(
+                    CORP_CODE_URL,
+                    params={"crtfc_key": self.api_key},
+                    timeout=(CORP_CODE_CONNECT_TIMEOUT, CORP_CODE_READ_TIMEOUT),
+                )
+                response.raise_for_status()
+                return response.content
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < CORP_CODE_ATTEMPTS:
+                    delay = CORP_CODE_BACKOFF * (2 ** (attempt - 1))
+                    log.warning(
+                        "corpCode.xml 다운로드 실패(%d/%d), %.0f초 후 재시도: %s",
+                        attempt,
+                        CORP_CODE_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+        raise DartError(f"corpCode.xml 다운로드 실패({CORP_CODE_ATTEMPTS}회 시도): {last_error}")
 
-        content = response.content
+    def _download_corp_code(self) -> bytes:
+        content = self._request_corp_code()
         if not content[:2] == b"PK":
             # 오류일 때는 zip 대신 XML 에러 메시지가 온다.
             text = content.decode("utf-8", errors="replace")
@@ -173,23 +198,61 @@ class DartClient:
                 raise DartError("corpCode zip 안에 XML 파일이 없습니다.")
             return archive.read(names[0])
 
+    def _newest_cached(self) -> Path | None:
+        """가장 최근에 받아 둔 corpCode 캐시 파일(없으면 None)."""
+        cached = sorted(self.cache_dir.glob("corpcode-*.xml"))
+        return cached[-1] if cached else None
+
+    def _prune_cache(self, keep: Path) -> None:
+        """오래된 캐시만 지운다. 최근 것은 DART 장애 시 대비책으로 남겨 둔다."""
+        cutoff = date.today() - timedelta(days=CORP_CODE_CACHE_DAYS)
+        for path in self.cache_dir.glob("corpcode-*.xml"):
+            if path == keep:
+                continue
+            stamp = path.stem.removeprefix("corpcode-")
+            try:
+                if date.fromisoformat(stamp) >= cutoff:
+                    continue
+            except ValueError:
+                pass  # 날짜를 못 읽는 파일은 정리 대상
+            path.unlink(missing_ok=True)
+
     def _load_corp_codes(self) -> None:
         if self._by_stock is not None:
             return
+
         cache_path = self._corp_code_cache_path()
         if cache_path.exists():
             log.info("corpCode 캐시 사용: %s", cache_path)
             xml_bytes = cache_path.read_bytes()
         else:
             log.info("corpCode.xml 다운로드 중...")
-            xml_bytes = self._download_corp_code()
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_bytes(xml_bytes)
-            for stale in self.cache_dir.glob("corpcode-*.xml"):
-                if stale != cache_path:
-                    stale.unlink(missing_ok=True)
+            try:
+                xml_bytes = self._download_corp_code()
+            except DartError as exc:
+                # DART 가 일시적으로 죽어도, 기업 코드 매핑은 거의 바뀌지 않는다.
+                # 지난 캐시로 진행하는 편이 메일을 통째로 거르는 것보다 낫다.
+                fallback = self._newest_cached()
+                if fallback is None:
+                    raise
+                log.warning(
+                    "%s → 지난 corpCode 캐시로 진행합니다: %s", exc, fallback.name
+                )
+                xml_bytes = fallback.read_bytes()
+            else:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(xml_bytes)
+                self._prune_cache(keep=cache_path)
+
         self._by_stock, self._by_name = parse_corp_code_xml(xml_bytes)
         log.info("corpCode 로드 완료: 상장 %d건", len(self._by_stock))
+
+    def preload(self) -> None:
+        """기업 코드 매핑을 미리 읽어 둔다(실패 시 DartError).
+
+        종목별 조회 도중이 아니라 시작 시점에 DART 가용 여부를 판정하기 위한 것.
+        """
+        self._load_corp_codes()
 
     def find_corp_code(self, stock_code: str = "", name: str = "") -> str:
         """종목코드 우선, 없으면 상호로 DART 고유번호를 찾는다."""

@@ -1,6 +1,8 @@
 import io
 import zipfile
 
+import requests
+
 import pytest
 
 from kind_managed.dart_client import (
@@ -282,3 +284,96 @@ def test_exact_match_is_preferred_over_fallback(tmp_path):
 
     assert note == ""
     assert info.via_common_stock is False
+
+
+# ------------------------------------------------- DART 장애 대응 (2026-09-21)
+
+class _DownSession(_FakeSession):
+    """corpCode.xml 요청이 항상 실패하는 세션(DART 장애 재현)."""
+
+    def __init__(self, company_payload=None):
+        super().__init__(company_payload)
+        self.corp_code_attempts = 0
+        self.timeouts = []
+
+    def get(self, url, params=None, timeout=None):
+        if url.endswith("corpCode.xml"):
+            self.corp_code_attempts += 1
+            self.timeouts.append(timeout)
+            raise requests.ConnectTimeout("Connection to opendart.fss.or.kr timed out.")
+        self.company_calls.append(params["corp_code"])
+        return _Response(payload=self.company_payload)
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """재시도 백오프 때문에 테스트가 느려지지 않게 한다."""
+    monkeypatch.setattr("kind_managed.dart_client.time.sleep", lambda _s: None)
+
+
+def test_corp_code_download_is_retried(tmp_path):
+    session = _DownSession()
+    with pytest.raises(DartError, match="3회 시도"):
+        _client(tmp_path, session).lookup(stock_code="005930")
+
+    assert session.corp_code_attempts == 3
+
+
+def test_connect_timeout_is_short_and_read_timeout_is_long(tmp_path):
+    """연결까지 길게 기다리면 서버가 죽었을 때 하염없이 매달린다."""
+    from kind_managed.dart_client import (
+        CORP_CODE_CONNECT_TIMEOUT,
+        CORP_CODE_READ_TIMEOUT,
+    )
+
+    session = _DownSession()
+    with pytest.raises(DartError):
+        _client(tmp_path, session).lookup(stock_code="005930")
+
+    assert session.timeouts[0] == (CORP_CODE_CONNECT_TIMEOUT, CORP_CODE_READ_TIMEOUT)
+    assert CORP_CODE_CONNECT_TIMEOUT <= 30
+
+
+def test_falls_back_to_previous_cache_when_dart_is_down(tmp_path):
+    """DART 가 죽어도 지난 캐시로 사업자번호를 채운다."""
+    (tmp_path / "corpcode-2026-09-20.xml").write_bytes(CORP_XML)
+    session = _DownSession()
+
+    info, problem = _client(tmp_path, session).lookup(stock_code="095570")
+
+    assert problem == ""
+    assert info.biz_no == "104-81-18820"
+    assert session.corp_code_attempts == 3  # 먼저 받아보려 시도는 한다
+
+
+def test_raises_when_dart_is_down_and_no_cache_exists(tmp_path):
+    with pytest.raises(DartError, match="다운로드 실패"):
+        _client(tmp_path, _DownSession()).lookup(stock_code="095570")
+
+
+def test_recent_cache_is_kept_as_a_fallback(tmp_path):
+    """최근 캐시는 다음 장애를 대비해 남기고, 오래된 것만 지운다."""
+    from datetime import date, timedelta
+
+    recent = tmp_path / f"corpcode-{(date.today() - timedelta(days=3)).isoformat()}.xml"
+    ancient = tmp_path / f"corpcode-{(date.today() - timedelta(days=90)).isoformat()}.xml"
+    recent.write_bytes(CORP_XML)
+    ancient.write_bytes(CORP_XML)
+
+    _client(tmp_path, _FakeSession()).lookup(stock_code="095570")
+
+    assert recent.exists()
+    assert not ancient.exists()
+
+
+def test_preload_surfaces_dart_outage(tmp_path):
+    """종목 조회 도중이 아니라 시작 시점에 가용 여부를 판정한다."""
+    client = _client(tmp_path, _DownSession())
+    with pytest.raises(DartError):
+        client.preload()
+
+
+def test_preload_succeeds_when_dart_is_up(tmp_path):
+    client = _client(tmp_path, _FakeSession())
+    client.preload()  # 예외가 없어야 한다
+    assert client.find_corp_code(stock_code="095570") == "00111111"

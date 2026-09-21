@@ -248,3 +248,101 @@ def test_preferred_share_does_not_borrow_common_stock_code():
     assert rows[0]["biz_no"] == "104-81-18820"
     assert rows[0]["code"] == ""  # 보통주 코드를 빌려 쓰지 않는다
     assert rows[0]["note"] == "우선주 — 보통주(깨끗한나라) 기준"
+
+
+# ----------------------------------------- DART 장애에도 메일은 보낸다 (2026-09-21)
+
+def _failing_dart_client(*_args, **_kwargs):
+    """DartClient 자리에 끼워 넣어 preload 에서 장애를 재현한다."""
+    from kind_managed.dart_client import DartError
+
+    class _Down:
+        def preload(self):
+            raise DartError(
+                "corpCode.xml 다운로드 실패(3회 시도): "
+                "Connection to opendart.fss.or.kr timed out."
+            )
+
+    return _Down()
+
+
+def test_dart_outage_still_sends_the_mail(tmp_path, monkeypatch):
+    """DART 가 죽어도 관리종목 목록까지 날리지 않는다."""
+    sent = {}
+    monkeypatch.setattr("kind_managed.pipeline.DartClient", _failing_dart_client)
+    monkeypatch.setattr(
+        "kind_managed.pipeline.send_message",
+        lambda config, message: sent.update(subject=message["Subject"]),
+    )
+    monkeypatch.setattr(
+        "kind_managed.pipeline.now_kst",
+        lambda: __import__("datetime").datetime(2026, 9, 22),
+    )
+    app_config = AppConfig(
+        dart_api_key="dummy", out_dir=str(tmp_path), cache_dir=str(tmp_path)
+    )
+    mail_config = MailConfig(host="smtp.example.com", sender="a@b.com", to=["c@d.com"])
+
+    result = run(app_config, mail_config, send_mail=True, stocks=STOCKS)
+
+    assert result.mail_sent is True          # 메일은 나간다
+    assert result.total == 2                 # 관리종목 목록은 온전하다
+    assert result.matched_biz_no == 0
+    assert "opendart" in result.dart_problem
+
+
+def test_dart_outage_is_flagged_in_subject_and_rows(tmp_path, monkeypatch):
+    """사업자번호가 조용히 비는 일이 없도록 제목과 비고에 남긴다."""
+    sent = {}
+    monkeypatch.setattr("kind_managed.pipeline.DartClient", _failing_dart_client)
+    monkeypatch.setattr(
+        "kind_managed.pipeline.send_message",
+        lambda config, message: sent.update(subject=message["Subject"]),
+    )
+    monkeypatch.setattr(
+        "kind_managed.pipeline.now_kst",
+        lambda: __import__("datetime").datetime(2026, 9, 22),
+    )
+    app_config = AppConfig(
+        dart_api_key="dummy", out_dir=str(tmp_path), cache_dir=str(tmp_path)
+    )
+    mail_config = MailConfig(host="smtp.example.com", sender="a@b.com", to=["c@d.com"])
+
+    result = run(app_config, mail_config, send_mail=True, stocks=STOCKS)
+
+    assert "[사업자번호 누락]" in sent["subject"]
+    assert all(row["note"] == "DART 조회 불가" for row in result.rows)
+
+    sheet = load_workbook(result.excel_path).active
+    assert "DART 조회 실패" in sheet.cell(row=3, column=1).value
+
+
+def test_healthy_run_has_no_outage_flag(tmp_path, monkeypatch):
+    """정상일 때는 경고 문구가 붙지 않는다."""
+    sent = {}
+    monkeypatch.setattr(
+        "kind_managed.pipeline.send_message",
+        lambda config, message: sent.update(subject=message["Subject"]),
+    )
+    monkeypatch.setattr(
+        "kind_managed.pipeline.now_kst",
+        lambda: __import__("datetime").datetime(2026, 9, 22),
+    )
+    app_config = AppConfig(dart_api_key="", out_dir=str(tmp_path), cache_dir=str(tmp_path))
+    mail_config = MailConfig(host="smtp.example.com", sender="a@b.com", to=["c@d.com"])
+
+    result = run(app_config, mail_config, send_mail=True, stocks=STOCKS)
+
+    assert "[사업자번호 누락]" not in sent["subject"]
+    sheet = load_workbook(result.excel_path).active
+    assert sheet.cell(row=3, column=1).value is None
+
+
+def test_mail_body_carries_the_outage_warning():
+    rows = collect_rows(STOCKS, None, as_of="2026-09-22", unavailable_note="DART 조회 불가")
+    text, body_html = build_mail_bodies(
+        rows, "2026-09-22", "f.xlsx", warning="※ DART 조회 실패로 사업자등록번호가 비어 있습니다 — timeout"
+    )
+
+    assert "DART 조회 실패" in text
+    assert "DART 조회 실패" in body_html

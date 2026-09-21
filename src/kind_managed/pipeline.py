@@ -26,6 +26,7 @@ class PipelineResult:
     excel_path: Path | None = None
     mail_sent: bool = False
     matched_biz_no: int = 0
+    dart_problem: str = ""
 
     @property
     def total(self) -> int:
@@ -36,6 +37,7 @@ def collect_rows(
     stocks: list[ManagedStock],
     dart: DartClient | None,
     as_of: str,
+    unavailable_note: str = "DART_API_KEY 미설정",
 ) -> list[dict[str, str]]:
     """관리종목 목록에 DART 기업정보(사업자등록번호 등)를 결합한다."""
     rows: list[dict[str, str]] = []
@@ -53,7 +55,7 @@ def collect_rows(
             "note": "",
         }
         if dart is None:
-            row["note"] = "DART_API_KEY 미설정"
+            row["note"] = unavailable_note
         else:
             info, problem = dart.lookup(stock_code=stock.code, name=stock.name)
             if info is not None:
@@ -122,12 +124,19 @@ def _summary_lines(rows: list[dict[str, str]], as_of: str) -> list[str]:
 
 
 def build_mail_bodies(
-    rows: list[dict[str, str]], as_of: str, filename: str, period: str = ""
+    rows: list[dict[str, str]],
+    as_of: str,
+    filename: str,
+    period: str = "",
+    warning: str = "",
 ) -> tuple[str, str]:
     """메일 본문(텍스트/HTML)을 만든다."""
     lines = _summary_lines(rows, as_of)
     if period:
         lines.insert(1, f"수집 범위: {period}")
+    if warning:
+        lines.append("")
+        lines.append(warning)
     text = "\n".join(
         [
             "안녕하세요.",
@@ -170,10 +179,17 @@ def build_mail_bodies(
     )
 
     summary_html = "".join(f"<li>{html.escape(line)}</li>" for line in lines[:5])
+    warning_html = (
+        f'<p style="background:#FFF4E5;border-left:4px solid #E8912D;padding:10px 14px;'
+        f'margin:14px 0">{html.escape(warning)}</p>'
+        if warning
+        else ""
+    )
     body_html = f"""<html><body style="font-family:'맑은 고딕',Malgun Gothic,sans-serif;font-size:14px;color:#222">
 <p>안녕하세요.</p>
 <p><b>{html.escape(as_of)}</b> 기준 한국거래소 KIND 관리종목 현황{html.escape(f" ({period})" if period else "")}을 전달드립니다.</p>
 <ul style="line-height:1.7">{summary_html}</ul>
+{warning_html}
 {new_section}
 <p>상세 내역은 첨부파일(<b>{html.escape(filename)}</b>)을 확인해 주세요.</p>
 <p style="color:#888;font-size:12px">
@@ -218,6 +234,7 @@ def run(
         )
 
     dart: DartClient | None = None
+    dart_problem = ""
     if app_config.dart_api_key:
         try:
             dart = DartClient(
@@ -225,17 +242,38 @@ def run(
                 timeout=app_config.request_timeout,
                 cache_dir=app_config.cache_dir,
             )
+            # 종목별 조회 도중이 아니라 여기서 DART 가용 여부를 판정한다.
+            dart.preload()
         except DartError as exc:
-            log.warning("DART 클라이언트 초기화 실패, 사업자번호 없이 진행합니다: %s", exc)
+            # DART 장애로 관리종목 목록까지 못 보내는 일이 없도록,
+            # 사업자등록번호만 비우고 계속 진행한다.
+            dart = None
+            dart_problem = str(exc)
+            log.error("DART 조회 불가, 사업자등록번호 없이 발송합니다: %s", exc)
     else:
+        dart_problem = "DART_API_KEY 미설정"
         log.warning("DART_API_KEY 가 없어 사업자등록번호 없이 진행합니다.")
 
-    rows = collect_rows(stocks, dart, as_of)
+    rows = collect_rows(
+        stocks,
+        dart,
+        as_of,
+        unavailable_note="DART 조회 불가" if app_config.dart_api_key else "DART_API_KEY 미설정",
+    )
 
     period = f"{app_config.from_date} 이후 지정분" if app_config.from_date else ""
+    warning = (
+        f"※ DART 조회 실패로 사업자등록번호가 비어 있습니다 — {dart_problem}"
+        if dart is None and app_config.dart_api_key
+        else ""
+    )
     filename = f"관리종목_{as_of.replace('-', '')}.xlsx"
     excel = write_excel(
-        rows, Path(app_config.out_dir) / filename, as_of=as_of, period=period
+        rows,
+        Path(app_config.out_dir) / filename,
+        as_of=as_of,
+        period=period,
+        warning=warning,
     )
     log.info("엑셀 생성 완료: %s (%d행)", excel.path, excel.row_count)
 
@@ -244,12 +282,16 @@ def run(
         rows=rows,
         excel_path=excel.path,
         matched_biz_no=sum(1 for row in rows if row["biz_no"]),
+        dart_problem=dart_problem,
     )
 
     if send_mail:
         scope = f" {app_config.from_date}~" if app_config.from_date else ""
-        subject = f"[관리종목] {as_of} 기준{scope} 관리종목 현황 ({len(rows)}종목)"
-        text, body_html = build_mail_bodies(rows, as_of, filename, period=period)
+        flag = " [사업자번호 누락]" if warning else ""
+        subject = f"[관리종목] {as_of} 기준{scope} 관리종목 현황 ({len(rows)}종목){flag}"
+        text, body_html = build_mail_bodies(
+            rows, as_of, filename, period=period, warning=warning
+        )
         message = build_message(
             mail_config,
             subject=subject,
